@@ -1,110 +1,85 @@
-import { useEffect, useRef, useState } from "react";
-import { Html5QrcodeScanner } from "html5-qrcode";
+import { useState } from "react";
 import { supabase } from "../lib/supabase";
+import Menu from "../components/Menu";
 
 export default function Scanner() {
-  const [result, setResult] = useState(null);
-  const scannerRef = useRef(null);
+  const [input, setInput] = useState("");
+  const [result, setResult] = useState("");
 
-  useEffect(() => {
-    const scanner = new Html5QrcodeScanner(
-      "reader",
-      {
-        fps: 10,
-        qrbox: 250,
-      },
-      false
-    );
+  const handleScan = async () => {
+    try {
+      const parsed = JSON.parse(input);
 
-    scanner.render(async (decodedText) => {
-      try {
-        scanner.clear(); // stop scanner after scan
+      const { data } = await supabase
+        .from("tickets")
+        .select("*")
+        .eq("id", parsed.ticket_id)
+        .single();
 
-        const data = JSON.parse(decodedText);
-        const ticketId = data.ticket_id;
-
-        // 🔍 Fetch ticket
-        const { data: ticket, error } = await supabase
-          .from("tickets")
-          .select("*")
-          .eq("id", ticketId)
-          .single();
-
-        if (!ticket || error) {
-          setResult({ status: "invalid" });
-          return;
-        }
-
-        // ⚠ Already entered
-        if (ticket.checked_in) {
-          setResult({ status: "duplicate", ticket });
-          return;
-        }
-
-        // ✅ Mark entry
-        await supabase
-          .from("tickets")
-          .update({
-            checked_in: true,
-            checked_in_at: new Date(),
-          })
-          .eq("id", ticketId);
-
-        setResult({ status: "valid", ticket });
-
-      } catch (err) {
-        console.error(err);
-        setResult({ status: "invalid" });
+      if (!data) {
+        setResult("❌ Invalid Ticket");
+        return;
       }
 
-      // 🔄 Restart scanner after 3 sec
-      setTimeout(() => {
-        window.location.reload();
-      }, 3000);
-    });
+      if (data.checked_in) {
+        setResult("⚠ Already Entered");
+      } else {
+        await supabase
+          .from("tickets")
+          .update({ checked_in: true })
+          .eq("id", data.id);
 
-    scannerRef.current = scanner;
+        setResult("✅ Entry Allowed");
+      }
 
-    return () => {
-      scanner.clear().catch(() => {});
-    };
-  }, []);
+    } catch {
+      setResult("❌ Invalid QR");
+    }
+  };
 
   return (
-    <div className="p-4">
-      <h1 className="text-xl font-bold mb-4">QR Scanner</h1>
+    <>
+    <Menu />
+    <div style={{ padding: "20px", textAlign: "center" }}>
+      <h2>Scanner</h2>
 
-      <div id="reader"></div>
+      <div style={{
+        width: "250px",
+        height: "250px",
+        border: "3px solid #1A0A00",
+        margin: "20px auto",
+        position: "relative"
+      }}>
+        <div style={{
+          height: "2px",
+          background: "#FF5C1A",
+          width: "100%",
+          position: "absolute",
+          animation: "scan 2s infinite"
+        }} />
+      </div>
 
-      {result && (
-        <div className="mt-6 p-4 border rounded text-center">
-          {result.status === "valid" && (
-            <div className="text-green-600">
-              <h2 className="text-2xl font-bold">Entry Allowed ✅</h2>
-              <p>{result.ticket.name}</p>
-              <img
-                src={result.ticket.photo_url}
-                className="w-24 mx-auto mt-2"
-              />
-            </div>
-          )}
+      <input
+        placeholder="Paste QR JSON"
+        value={input}
+        onChange={(e) => setInput(e.target.value)}
+        style={{
+          width: "100%",
+          padding: "10px",
+          marginBottom: "10px"
+        }}
+      />
 
-          {result.status === "invalid" && (
-            <h2 className="text-red-600 text-2xl font-bold">
-              Traitor ❌
-            </h2>
-          )}
+      <button onClick={handleScan} style={{
+        padding: "10px 20px",
+        background: "#1A0A00",
+        color: "white"
+      }}>
+        Scan
+      </button>
 
-          {result.status === "duplicate" && (
-            <div className="text-yellow-600">
-              <h2 className="text-2xl font-bold">
-                Already Entered ⚠
-              </h2>
-              <p>{result.ticket.name}</p>
-            </div>
-          )}
-        </div>
-      )}
+      <h3 style={{ marginTop: "20px" }}>{result}</h3>
     </div>
+    </>
   );
 }

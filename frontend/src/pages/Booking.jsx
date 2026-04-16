@@ -1,8 +1,8 @@
 import { useState } from "react";
 import { supabase } from "../lib/supabase";
 import { useNavigate, useLocation } from "react-router-dom";
-import QRCode from "qrcode";
 import axios from "axios";
+import Menu from "../components/Menu";
 
 export default function Booking() {
   const [name, setName] = useState("");
@@ -19,35 +19,22 @@ export default function Booking() {
   // ================= BOOKING =================
   const handleBooking = async (isPaid = false) => {
     try {
-      if (!photo) {
-        alert("Please upload photo");
-        return;
-      }
-
-      // 🔥 FIXED PHOTO UPLOAD
       const fileName = `${Date.now()}-${Math.random()}-${photo.name}`;
 
       const { error: uploadError } = await supabase.storage
         .from("photos")
-        .upload(fileName, photo, {
-          cacheControl: "3600",
-          upsert: false,
-        });
+        .upload(fileName, photo);
 
       if (uploadError) {
-        console.error(uploadError);
         alert("Photo upload failed");
         return;
       }
 
-      const { data: publicUrlData } = supabase.storage
+      const { data } = supabase.storage
         .from("photos")
         .getPublicUrl(fileName);
 
-      const photoUrl = publicUrlData.publicUrl;
-
-      // 🔥 INSERT TICKET
-      const { data: ticketData, error } = await supabase
+      const { data: ticket } = await supabase
         .from("tickets")
         .insert([
           {
@@ -56,118 +43,123 @@ export default function Booking() {
             phone,
             slot_id: slot.id,
             event_id: event.id,
-            photo_url: photoUrl,
+            photo_url: data.publicUrl,
             payment_status: isPaid ? "paid" : "free",
           },
         ])
         .select()
         .single();
 
-      if (error || !ticketData) {
-        console.error(error);
-        alert("Booking failed");
-        return;
-      }
-
-      // 🔥 QR GENERATION
-      const qr = await QRCode.toDataURL(
-        JSON.stringify({
-          ticket_id: ticketData.id,
-        })
-      );
-
-      navigate("/ticket", { state: { ticket: ticketData, qr } });
+      navigate("/ticket", { state: { ticket } });
 
     } catch (err) {
       console.error(err);
-      alert("Error in booking");
+      alert("Booking failed");
     }
   };
 
   // ================= PAYMENT =================
   const handlePayment = async () => {
-    try {
-      const { data: order } = await axios.post(
-        "http://localhost:5000/create-order",
-        {
-          amount: event.price,
+    const { data: order } = await axios.post(
+      "http://localhost:5000/create-order",
+      { amount: event.price }
+    );
+
+    const options = {
+      key: import.meta.env.VITE_RAZORPAY_KEY_ID,
+      amount: order.amount,
+      currency: "INR",
+      name: "Malhar Fest",
+      description: event.name,
+      order_id: order.id,
+
+      handler: async function (response) {
+        const verify = await axios.post(
+          "http://localhost:5000/verify-payment",
+          response
+        );
+
+        if (verify.data.success) {
+          handleBooking(true);
+        } else {
+          alert("Payment failed");
         }
-      );
+      },
+    };
 
-      const options = {
-        key: import.meta.env.VITE_RAZORPAY_KEY_ID,
-        amount: order.amount,
-        currency: "INR",
-        name: "Malhar Fest",
-        description: event.name,
-        order_id: order.id,
-
-        // 🔐 SECURE HANDLER
-        handler: async function (response) {
-          try {
-            const verifyRes = await axios.post(
-              "http://localhost:5000/verify-payment",
-              {
-                razorpay_order_id: response.razorpay_order_id,
-                razorpay_payment_id: response.razorpay_payment_id,
-                razorpay_signature: response.razorpay_signature,
-              }
-            );
-
-            if (verifyRes.data.success) {
-              handleBooking(true); // ✅ ONLY AFTER VERIFY
-            } else {
-              alert("Payment verification failed");
-            }
-          } catch (err) {
-            console.error(err);
-            alert("Verification error");
-          }
-        },
-      };
-
-      const rzp = new window.Razorpay(options);
-      rzp.open();
-
-    } catch (err) {
-      console.error(err);
-      alert("Payment failed");
-    }
+    new window.Razorpay(options).open();
   };
 
   return (
-    <div className="p-6 flex flex-col gap-3">
-      <h1 className="text-xl font-bold">{event.name}</h1>
+    <menu>
+    <div style={{ padding: "20px" }}>
+      {/* HERO */}
+      <div style={{
+        background: "#1A0A00",
+        color: "white",
+        padding: "20px",
+        borderRadius: "12px",
+        marginBottom: "20px"
+      }}>
+        <h1 style={{ color: "#FF5C1A", fontSize: "30px" }}>
+          BOOK YOUR PASS
+        </h1>
+        <p>{event.name}</p>
+      </div>
 
-      <input
-        placeholder="Name"
-        onChange={(e) => setName(e.target.value)}
-        className="border p-2"
-      />
+      {/* FORM */}
+      <div style={{
+        background: "#fff",
+        padding: "20px",
+        borderRadius: "12px"
+      }}>
+        <input
+          placeholder="Name"
+          onChange={(e) => setName(e.target.value)}
+          style={inputStyle}
+        />
 
-      <input
-        placeholder="College"
-        onChange={(e) => setCollege(e.target.value)}
-        className="border p-2"
-      />
+        <input
+          placeholder="College"
+          onChange={(e) => setCollege(e.target.value)}
+          style={inputStyle}
+        />
 
-      <input type="file" onChange={(e) => setPhoto(e.target.files[0])} />
+        <input
+          type="file"
+          onChange={(e) => setPhoto(e.target.files[0])}
+        />
+      </div>
 
+      {/* BUTTON */}
       {event.price > 0 ? (
-        <button
-          onClick={handlePayment}
-          className="bg-purple-500 text-white p-2"
-        >
+        <button style={btnStyle} onClick={handlePayment}>
           Pay ₹{event.price}
         </button>
       ) : (
-        <button
-          onClick={() => handleBooking()}
-          className="bg-green-500 text-white p-2"
-        >
+        <button style={btnStyle} onClick={() => handleBooking()}>
           Book Free
         </button>
       )}
     </div>
+    </menu>
   );
 }
+
+const inputStyle = {
+  width: "100%",
+  padding: "12px",
+  marginBottom: "10px",
+  borderRadius: "8px",
+  border: "1px solid #ddd",
+};
+
+const btnStyle = {
+  width: "100%",
+  padding: "14px",
+  background: "#FF5C1A",
+  color: "white",
+  border: "none",
+  borderRadius: "8px",
+  marginTop: "15px",
+};

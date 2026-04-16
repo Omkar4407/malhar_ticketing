@@ -2,6 +2,7 @@ import { useState } from "react";
 import axios from "axios";
 import { supabase } from "../lib/supabase";
 import { useNavigate } from "react-router-dom";
+import Menu from "../components/Menu";
 
 export default function Login() {
   const [phone, setPhone] = useState("");
@@ -15,55 +16,83 @@ export default function Login() {
   };
 
   const verifyOtp = async () => {
-    try {
-      await axios.post("http://localhost:5000/verify-otp", {
-        phone,
-        otp,
-      });
+    await axios.post("http://localhost:5000/verify-otp", { phone, otp });
 
-      await supabase
-        .from("users")
-        .upsert([{ phone_number: phone }], {
-          onConflict: "phone_number",
-        });
+    await supabase
+      .from("users")
+      .upsert([{ phone_number: phone }], { onConflict: "phone_number" });
 
-      localStorage.setItem("userPhone", phone);
-
-      navigate("/events");
-    } catch {
-      alert("Invalid OTP");
-    }
+    localStorage.setItem("userPhone", phone);
+    navigate("/events");
   };
 
   return (
-    <div className="flex flex-col items-center justify-center h-screen gap-4">
-      <h1 className="text-3xl font-bold">Login</h1>
+    <menu>
+    <div style={{ padding: "20px" }}>
+      <div style={hero}>
+        <h1 style={title}>MALHAR</h1>
+        <p>Login to continue</p>
+      </div>
 
-      {step === 1 && (
-        <>
-          <input
-            placeholder="Phone"
-            onChange={(e) => setPhone(e.target.value)}
-            className="border p-2"
-          />
-          <button onClick={sendOtp} className="bg-blue-500 text-white p-2">
-            Send OTP
-          </button>
-        </>
-      )}
-
-      {step === 2 && (
-        <>
-          <input
-            placeholder="OTP"
-            onChange={(e) => setOtp(e.target.value)}
-            className="border p-2"
-          />
-          <button onClick={verifyOtp} className="bg-green-500 text-white p-2">
-            Verify
-          </button>
-        </>
-      )}
+      <div style={card}>
+        {step === 1 ? (
+          <>
+            <input
+              placeholder="Phone Number"
+              onChange={(e) => setPhone(e.target.value)}
+              style={input}
+            />
+            <button onClick={sendOtp} style={btn}>
+              Send OTP
+            </button>
+          </>
+        ) : (
+          <>
+            <input
+              placeholder="Enter OTP"
+              onChange={(e) => setOtp(e.target.value)}
+              style={input}
+            />
+            <button onClick={verifyOtp} style={btn}>
+              Verify OTP
+            </button>
+          </>
+        )}
+      </div>
     </div>
+    </menu>
   );
 }
+
+const hero = {
+  background: "#1A0A00",
+  color: "white",
+  padding: "20px",
+  borderRadius: "12px",
+  marginBottom: "20px",
+};
+
+const title = { color: "#FF5C1A", fontSize: "28px" };
+
+const card = {
+  background: "#fff",
+  padding: "20px",
+  borderRadius: "12px",
+};
+
+const input = {
+  width: "100%",
+  padding: "12px",
+  marginBottom: "10px",
+  borderRadius: "8px",
+  border: "1px solid #ddd",
+};
+
+const btn = {
+  width: "100%",
+  padding: "12px",
+  background: "#FF5C1A",
+  color: "white",
+  border: "none",
+  borderRadius: "8px",
+};

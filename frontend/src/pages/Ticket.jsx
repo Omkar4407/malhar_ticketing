@@ -1,22 +1,76 @@
-import { useLocation } from "react-router-dom";
+import { useEffect, useState } from "react";
+import { supabase } from "../lib/supabase";
+import QRCode from "qrcode";
+import Menu from "../components/Menu";
 
 export default function Ticket() {
-  const location = useLocation();
-  const { ticket, qr } = location.state || {};
+  const [tickets, setTickets] = useState([]);
 
-  if (!ticket) return <h1>No ticket found</h1>;
+  const phone = localStorage.getItem("userPhone");
+
+  useEffect(() => {
+    fetchTickets();
+  }, []);
+
+  const fetchTickets = async () => {
+    const { data } = await supabase
+      .from("tickets")
+      .select("*")
+      .eq("phone", phone);
+
+    setTickets(data || []);
+  };
 
   return (
-    <div className="p-6 flex flex-col items-center gap-4">
-      <h1 className="text-2xl font-bold">Your Ticket</h1>
+    <>
+      <Menu />
 
-      <img src={qr} alt="QR Code" className="w-40" />
+      <div style={{ padding: "20px" }}>
+        <h1>My Tickets</h1>
 
-      <p><b>Name:</b> {ticket.name}</p>
-      <p><b>College:</b> {ticket.college}</p>
-      <p><b>Phone:</b> {ticket.phone}</p>
+        {tickets.length === 0 && <p>No tickets found</p>}
 
-      <img src={ticket.photo_url} className="w-32 rounded" />
+        {tickets.map((ticket) => (
+          <TicketCard key={ticket.id} ticket={ticket} />
+        ))}
+      </div>
+    </>
+  );
+}
+
+function TicketCard({ ticket }) {
+  const [qr, setQr] = useState("");
+
+  useEffect(() => {
+    QRCode.toDataURL(
+      JSON.stringify({ ticket_id: ticket.id })
+    ).then(setQr);
+  }, [ticket]);
+
+  return (
+    <div
+      style={{
+        background: "#1A0A00",
+        color: "white",
+        padding: "20px",
+        borderRadius: "12px",
+        marginBottom: "15px",
+      }}
+    >
+      <h2 style={{ color: "#FF5C1A" }}>MALHAR</h2>
+
+      <p><b>{ticket.name}</b></p>
+      <p>{ticket.phone}</p>
+
+      <img src={ticket.photo_url} width="60" />
+
+      <div style={{ marginTop: "10px" }}>
+        <img src={qr} width="100" />
+      </div>
+
+      <p style={{ fontSize: "10px" }}>
+        ID: {ticket.id}
+      </p>
     </div>
   );
 }
