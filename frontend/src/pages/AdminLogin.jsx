@@ -1,74 +1,213 @@
 import { useState } from "react";
 import { supabase } from "../lib/supabase";
 import { useNavigate } from "react-router-dom";
+import axios from "axios";
 
 export default function AdminLogin() {
   const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
   const navigate = useNavigate();
 
-  const login = async () => {
-    const { data } = await supabase
+  const handleLogin = async () => {
+    if (!email.trim() || !password) {
+      setError("Please fill in all fields.");
+      return;
+    }
+
+    setLoading(true);
+    setError("");
+
+    // Step 1: verify password server-side (password never compared in browser)
+    let adminToken;
+    try {
+      const { data: tokenData } = await axios.post(`${import.meta.env.VITE_API_URL}/admin-login`, { password });
+      adminToken = tokenData.token;
+    } catch (err) {
+      setError(err?.response?.data?.error || "Incorrect password.");
+      setLoading(false);
+      return;
+    }
+
+    // Step 2: confirm email exists as super_admin in DB
+    const { data, error: dbError } = await supabase
       .from("admins")
       .select("*")
-      .eq("email", email)
+      .eq("email", email.trim().toLowerCase())
+      .eq("role", "super_admin")
       .single();
 
-    if (!data) return alert("Access denied");
+    setLoading(false);
 
+    if (dbError || !data) {
+      setError("Access denied. This email is not authorised as a super admin.");
+      return;
+    }
+
+    localStorage.setItem("adminToken", adminToken);
     localStorage.setItem("admin", JSON.stringify(data));
-    navigate("/admin-dashboard");
+    navigate("/admin");
   };
 
   return (
-    <div style={{ padding: "20px" }}>
-      <div style={hero}>
-        <h1 style={title}>ADMIN LOGIN</h1>
+    <div style={styles.page}>
+      {/* ── Hero ── */}
+      <div style={styles.hero}>
+        <div style={styles.badge}>Admin</div>
+        <h1 style={styles.title}>Admin Login</h1>
+        <p style={styles.subtitle}>Restricted access. Authorised personnel only.</p>
       </div>
 
-      <div style={card}>
+      {/* ── Form ── */}
+      <div style={styles.card}>
+        {error && <div style={styles.errorBox}>{error}</div>}
+
+        <label style={styles.label} htmlFor="admin-email">Email Address</label>
         <input
-          placeholder="Admin Email"
-          onChange={(e) => setEmail(e.target.value)}
-          style={input}
+          id="admin-email"
+          type="email"
+          placeholder="you@example.com"
+          value={email}
+          onChange={(e) => { setEmail(e.target.value); if (error) setError(""); }}
+          onKeyDown={(e) => e.key === "Enter" && handleLogin()}
+          style={styles.input}
+          autoComplete="email"
+          autoFocus
         />
 
-        <button onClick={login} style={btn}>
-          Login
+        <label style={styles.label} htmlFor="admin-password">Password</label>
+        <div style={styles.inputWrapper}>
+          <input
+            id="admin-password"
+            type={showPassword ? "text" : "password"}
+            placeholder="Enter password"
+            value={password}
+            onChange={(e) => { setPassword(e.target.value); if (error) setError(""); }}
+            onKeyDown={(e) => e.key === "Enter" && handleLogin()}
+            style={{ ...styles.input, marginBottom: 0, paddingRight: "40px" }}
+          />
+          <button
+            onClick={() => setShowPassword((v) => !v)}
+            style={styles.eyeBtn}
+            tabIndex={-1}
+            aria-label={showPassword ? "Hide password" : "Show password"}
+          >
+            {showPassword ? "🙈" : "👁️"}
+          </button>
+        </div>
+
+        <button
+          onClick={handleLogin}
+          disabled={loading}
+          style={{ ...styles.btn, marginTop: "16px", opacity: loading ? 0.7 : 1 }}
+        >
+          {loading ? "Checking…" : "Login"}
         </button>
       </div>
     </div>
   );
 }
 
-const hero = {
-  background: "#1A0A00",
-  color: "white",
-  padding: "20px",
-  borderRadius: "12px",
-  marginBottom: "20px",
-};
-
-const title = { color: "#FF5C1A" };
-
-const card = {
-  background: "#fff",
-  padding: "20px",
-  borderRadius: "12px",
-};
-
-const input = {
-  width: "100%",
-  padding: "12px",
-  marginBottom: "10px",
-  borderRadius: "8px",
-  border: "1px solid #ddd",
-};
-
-const btn = {
-  width: "100%",
-  padding: "12px",
-  background: "#FF5C1A",
-  color: "white",
-  border: "none",
-  borderRadius: "8px",
+const styles = {
+  page: {
+    padding: "24px 20px",
+    maxWidth: "420px",
+    margin: "0 auto",
+    fontFamily: "'Segoe UI', system-ui, sans-serif",
+    color: "#1a1a1a",
+  },
+  hero: {
+    background: "#1A0A00",
+    borderRadius: "16px",
+    padding: "28px 24px",
+    marginBottom: "16px",
+  },
+  badge: {
+    display: "inline-block",
+    background: "rgba(255,92,26,0.2)",
+    color: "#FF5C1A",
+    fontSize: "11px",
+    fontWeight: 700,
+    letterSpacing: "0.1em",
+    textTransform: "uppercase",
+    padding: "3px 10px",
+    borderRadius: "20px",
+    border: "1px solid rgba(255,92,26,0.35)",
+    marginBottom: "10px",
+  },
+  title: {
+    color: "#FF5C1A",
+    fontSize: "28px",
+    fontWeight: 800,
+    margin: "0 0 6px 0",
+    letterSpacing: "-0.02em",
+  },
+  subtitle: {
+    color: "rgba(255,255,255,0.4)",
+    fontSize: "13px",
+    margin: 0,
+  },
+  card: {
+    background: "#fff",
+    padding: "20px",
+    borderRadius: "12px",
+    border: "1px solid #eee",
+    boxShadow: "0 1px 4px rgba(0,0,0,0.06)",
+  },
+  label: {
+    display: "block",
+    fontSize: "12px",
+    fontWeight: 700,
+    color: "#555",
+    marginBottom: "6px",
+    textTransform: "uppercase",
+    letterSpacing: "0.04em",
+  },
+  input: {
+    width: "100%",
+    padding: "10px 12px",
+    marginBottom: "14px",
+    borderRadius: "8px",
+    border: "1px solid #ddd",
+    fontSize: "14px",
+    outline: "none",
+    boxSizing: "border-box",
+  },
+  inputWrapper: {
+    position: "relative",
+  },
+  eyeBtn: {
+    position: "absolute",
+    right: "10px",
+    top: "50%",
+    transform: "translateY(-50%)",
+    background: "none",
+    border: "none",
+    cursor: "pointer",
+    fontSize: "16px",
+    padding: 0,
+    lineHeight: 1,
+  },
+  btn: {
+    width: "100%",
+    padding: "12px",
+    background: "#FF5C1A",
+    color: "white",
+    border: "none",
+    borderRadius: "8px",
+    fontWeight: 700,
+    fontSize: "15px",
+    cursor: "pointer",
+  },
+  errorBox: {
+    background: "#fff0f0",
+    border: "1px solid #fdd",
+    color: "#d0312d",
+    fontSize: "13px",
+    padding: "8px 12px",
+    borderRadius: "7px",
+    marginBottom: "14px",
+  },
 };
