@@ -4,26 +4,33 @@ import { useNavigate, useLocation } from "react-router-dom";
 import axios from "axios";
 import Menu from "../components/Menu";
 
-// MED #4: Allowed MIME types and max size
+const API = import.meta.env.VITE_API_URL;
 const ALLOWED_TYPES = ["image/jpeg", "image/jpg", "image/png", "image/webp"];
 const MAX_SIZE_BYTES = 5 * 1024 * 1024; // 5MB
 
+// ── Helper: get auth header from stored JWT ───────────────────────────────────
+// FIX — All backend calls now include the JWT in Authorization header.
+// The backend reads phone from the token, not from the request body.
+function authHeader() {
+  const token = localStorage.getItem("userToken");
+  return { Authorization: `Bearer ${token}` };
+}
+
 export default function Booking() {
-  const [name, setName] = useState("");
-  const [college, setCollege] = useState("");
-  const [photo, setPhoto] = useState(null);
+  const [name, setName]           = useState("");
+  const [college, setCollege]     = useState("");
+  const [photo, setPhoto]         = useState(null);
   const [photoPreview, setPhotoPreview] = useState(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
+  const [photoUrl, setPhotoUrl]   = useState(null);   // uploaded URL, set in step 1
+  const [uploading, setUploading] = useState(false);  // photo upload state
+  const [loading, setLoading]     = useState(false);  // booking/payment state
+  const [error, setError]         = useState("");
 
-  const navigate = useNavigate();
-  const location = useLocation();
-
-  const slot = location.state?.slot;
+  const navigate  = useNavigate();
+  const location  = useLocation();
+  const slot  = location.state?.slot;
   const event = location.state?.event;
-  const phone = localStorage.getItem("userPhone");
 
-  // Guard: if navigated here without state
   if (!slot || !event) {
     return (
       <>
@@ -38,152 +45,119 @@ export default function Booking() {
   }
 
   const validate = () => {
-    if (!name.trim()) return "Please enter your name.";
+    if (!name.trim())    return "Please enter your name.";
     if (!college.trim()) return "Please enter your college name.";
-    if (!photo) return "Please upload a photo.";
+    if (!photoUrl)       return "Please upload a photo first.";
     return null;
   };
 
-  // MED #4: Validate file type and size before accepting it
   const handlePhotoChange = (e) => {
     const file = e.target.files[0];
     if (!file) return;
-
     if (!ALLOWED_TYPES.includes(file.type)) {
       setError("Only JPEG, PNG, or WebP images are allowed.");
       e.target.value = "";
       return;
     }
-
     if (file.size > MAX_SIZE_BYTES) {
       setError("Photo must be smaller than 5MB.");
       e.target.value = "";
       return;
     }
-
     setPhoto(file);
     setPhotoPreview(URL.createObjectURL(file));
+    setPhotoUrl(null); // reset so they must upload before booking
     if (error) setError("");
   };
 
-  // ── Booking ──────────────────────────────────────────────────────────────
-  const handleBooking = async (isPaid = false) => {
-    const validationError = validate();
-    if (validationError) { setError(validationError); return; }
-
-    setLoading(true);
+  // ── FIX: Photo upload is now a SEPARATE explicit step ────────────────────
+  // Previously: photo was uploaded inside handleBooking() and handlePayment(),
+  // meaning every booking attempt triggered a file upload mid-flow. At 450
+  // concurrent bookings, this created 450 simultaneous file uploads — the
+  // biggest latency source and the main reason <150ms was impossible.
+  //
+  // Now: user uploads the photo first with a dedicated button. Once uploaded,
+  // the URL is stored. The booking/payment step only does the DB write (~20ms).
+  // If the slot is full, the user doesn't waste time on a photo upload.
+  const handleUploadPhoto = async () => {
+    if (!photo) return;
+    setUploading(true);
     setError("");
-
     try {
-      // MED #2: Pre-check for existing booking with same phone + slot_id
-      const { data: existing } = await supabase
-        .from("tickets")
-        .select("id")
-        .eq("phone", phone)
-        .eq("slot_id", slot.id)
-        .maybeSingle();
-
-      if (existing) {
-        setError("You have already booked this slot.");
-        setLoading(false);
-        return;
-      }
-
-      const fileName = `${Date.now()}-${Math.random()}-${photo.name}`;
-
+      const fileName = `${Date.now()}-${Math.random().toString(36).slice(2)}-${photo.name}`;
       const { error: uploadError } = await supabase.storage
         .from("photos")
         .upload(fileName, photo);
 
       if (uploadError) {
-        // LOW #1: Generic message to user, real error only to console
         console.error("Photo upload error:", uploadError);
         setError("Photo upload failed. Please try again.");
-        setLoading(false);
         return;
       }
 
-      const { data: urlData } = supabase.storage
-        .from("photos")
-        .getPublicUrl(fileName);
-
-      const { data: ticket, error: ticketError } = await supabase
-        .from("tickets")
-        .insert([
-          {
-            name: name.trim(),
-            college: college.trim(),
-            phone,
-            slot_id: slot.id,
-            event_id: event.id,
-            photo_url: urlData.publicUrl,
-            payment_status: isPaid ? "paid" : "free",
-          },
-        ])
-        .select()
-        .single();
-
-      if (ticketError) {
-        // LOW #1: Don't expose DB schema errors
-        console.error("Ticket insert error:", ticketError);
-        setError("Booking failed. Please try again.");
-        setLoading(false);
-        return;
-      }
-
-      navigate("/ticket", { state: { ticket } });
+      const { data: urlData } = supabase.storage.from("photos").getPublicUrl(fileName);
+      setPhotoUrl(urlData.publicUrl);
     } catch (err) {
-      // LOW #1: Never surface err.message to the user
-      console.error("Booking error:", err);
-      setError("Something went wrong. Please try again.");
+      console.error("Upload error:", err);
+      setError("Photo upload failed. Please try again.");
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  // ── Free booking ──────────────────────────────────────────────────────────
+  // FIX — Free bookings now go through /book-free backend endpoint which calls
+  // the book_slot() DB function with SELECT FOR UPDATE row locking.
+  // Previously: direct Supabase INSERT from the frontend — no lock, race-prone.
+  const handleBooking = async () => {
+    const validationError = validate();
+    if (validationError) { setError(validationError); return; }
+
+    setLoading(true);
+    setError("");
+    try {
+      const { data } = await axios.post(
+        `${API}/book-free`,
+        {
+          name: name.trim(),
+          college: college.trim(),
+          slot_id: slot.id,
+          event_id: event.id,
+          photo_url: photoUrl,
+          // NOTE: phone is NOT sent — backend reads it from the JWT token
+        },
+        { headers: authHeader() }
+      );
+
+      navigate("/ticket", { state: { ticket: data.ticket } });
+    } catch (err) {
+      const msg = err.response?.data?.error;
+      if (err.response?.status === 409) {
+        // Slot filled between page load and booking attempt — tell user clearly
+        setError("Sorry, this slot just sold out. Please go back and pick another.");
+      } else {
+        setError(msg || "Booking failed. Please try again.");
+      }
+    } finally {
       setLoading(false);
     }
   };
 
-  // ── Payment ───────────────────────────────────────────────────────────────
+  // ── Paid booking ──────────────────────────────────────────────────────────
+  // FIX — /create-order now checks slot availability before opening Razorpay.
+  // FIX — /verify-payment uses book_slot() RPC — atomic, no oversell.
+  // FIX — phone is NOT sent in body; backend reads from JWT.
   const handlePayment = async () => {
     const validationError = validate();
     if (validationError) { setError(validationError); return; }
 
     setLoading(true);
     setError("");
-
     try {
-      // MED #2: Pre-check for existing booking before opening Razorpay
-      const { data: existing } = await supabase
-        .from("tickets")
-        .select("id")
-        .eq("phone", phone)
-        .eq("slot_id", slot.id)
-        .maybeSingle();
-
-      if (existing) {
-        setError("You have already booked this slot.");
-        setLoading(false);
-        return;
-      }
-
-      const fileName = `${Date.now()}-${Math.random()}-${photo.name}`;
-      const { error: uploadError } = await supabase.storage
-        .from("photos")
-        .upload(fileName, photo);
-
-      if (uploadError) {
-        console.error("Photo upload error:", uploadError);
-        setError("Photo upload failed. Please try again.");
-        setLoading(false);
-        return;
-      }
-
-      const { data: urlData } = supabase.storage
-        .from("photos")
-        .getPublicUrl(fileName);
-
-      const photoUrl = urlData.publicUrl;
-
       const { data: order } = await axios.post(
-        `${import.meta.env.VITE_API_URL}/create-order`,
-        { amount: event.price }
+        `${API}/create-order`,
+        { amount: event.price, slot_id: slot.id, event_id: event.id },
+        { headers: authHeader() }
       );
 
       const options = {
@@ -196,42 +170,53 @@ export default function Booking() {
         handler: async function (response) {
           try {
             const verify = await axios.post(
-              `${import.meta.env.VITE_API_URL}/verify-payment`,
+              `${API}/verify-payment`,
               {
                 ...response,
                 name: name.trim(),
                 college: college.trim(),
-                phone,
                 slot_id: slot.id,
                 event_id: event.id,
                 photo_url: photoUrl,
-              }
+                // phone NOT sent — comes from JWT on backend
+              },
+              { headers: authHeader() }
             );
+
             if (verify.data.success) {
               navigate("/ticket", { state: { ticket: verify.data.ticket } });
             } else {
-              // LOW #1: Generic message, no internal detail exposed
               setError("Payment verification failed. Please contact support.");
               setLoading(false);
             }
           } catch (err) {
-            console.error("Payment verify error:", err);
-            setError("Payment verification failed. Please contact support.");
+            const msg = err.response?.data?.error;
+            if (err.response?.status === 409) {
+              setError("Slot sold out after payment. Please contact support for a refund.");
+            } else {
+              setError(msg || "Payment verification failed. Please contact support.");
+            }
             setLoading(false);
           }
         },
-        modal: {
-          ondismiss: () => setLoading(false),
-        },
+        modal: { ondismiss: () => setLoading(false) },
       };
 
       new window.Razorpay(options).open();
     } catch (err) {
-      console.error("Payment error:", err);
-      setError("Could not initiate payment. Please try again.");
-      setLoading(false);
+      const msg = err.response?.data?.error;
+      if (err.response?.status === 409) {
+        setError("This slot just sold out. Please go back and pick another.");
+        setLoading(false);
+      } else {
+        setError(msg || "Could not initiate payment. Please try again.");
+        setLoading(false);
+      }
     }
   };
+
+  const isPhotoReady = !!photoUrl;
+  const isFormReady  = name.trim() && college.trim() && isPhotoReady;
 
   return (
     <>
@@ -270,6 +255,7 @@ export default function Booking() {
             style={styles.input}
           />
 
+          {/* ── Photo — upload as explicit step ── */}
           <label style={styles.label}>Photo *</label>
           <label htmlFor="booking-photo" style={styles.fileLabel}>
             {photoPreview ? (
@@ -277,11 +263,10 @@ export default function Booking() {
             ) : (
               <div style={styles.filePlaceholder}>
                 <span style={styles.fileIcon}>📷</span>
-                <span style={styles.fileText}>Tap to upload a photo (JPEG/PNG/WebP, max 5MB)</span>
+                <span style={styles.fileText}>Tap to select photo (JPEG/PNG/WebP, max 5MB)</span>
               </div>
             )}
           </label>
-          {/* MED #4: accept restricts the file picker UI; validation in handlePhotoChange is the real guard */}
           <input
             id="booking-photo"
             type="file"
@@ -290,9 +275,25 @@ export default function Booking() {
             onChange={handlePhotoChange}
             style={{ display: "none" }}
           />
-          {photoPreview && (
+
+          {/* Upload button — separate from booking */}
+          {photo && !isPhotoReady && (
             <button
-              onClick={() => { setPhoto(null); setPhotoPreview(null); }}
+              onClick={handleUploadPhoto}
+              disabled={uploading}
+              style={{ ...styles.uploadBtn, opacity: uploading ? 0.7 : 1 }}
+            >
+              {uploading ? "Uploading…" : "📤 Upload Photo"}
+            </button>
+          )}
+
+          {isPhotoReady && (
+            <div style={styles.uploadedBadge}>✅ Photo uploaded</div>
+          )}
+
+          {photoPreview && !isPhotoReady && !uploading && (
+            <button
+              onClick={() => { setPhoto(null); setPhotoPreview(null); setPhotoUrl(null); }}
               style={styles.removePhoto}
             >
               Remove photo
@@ -302,12 +303,14 @@ export default function Booking() {
 
         {/* ── CTA ── */}
         <button
-          style={{ ...styles.btn, opacity: loading ? 0.7 : 1 }}
-          disabled={loading}
-          onClick={event.price > 0 ? handlePayment : () => handleBooking()}
+          style={{ ...styles.btn, opacity: loading || !isFormReady ? 0.6 : 1 }}
+          disabled={loading || !isFormReady}
+          onClick={event.price > 0 ? handlePayment : handleBooking}
         >
           {loading
             ? "Please wait…"
+            : !isPhotoReady
+            ? "Upload photo to continue"
             : event.price > 0
             ? `Pay ₹${event.price}`
             : "Book Free Pass"}
@@ -351,11 +354,7 @@ const styles = {
     margin: "0 0 6px 0",
     letterSpacing: "-0.02em",
   },
-  eventName: {
-    color: "rgba(255,255,255,0.75)",
-    fontSize: "15px",
-    margin: "0 0 10px 0",
-  },
+  eventName: { color: "rgba(255,255,255,0.75)", fontSize: "15px", margin: "0 0 10px 0" },
   slotPill: {
     display: "inline-block",
     background: "rgba(255,255,255,0.08)",
@@ -392,11 +391,7 @@ const styles = {
     outline: "none",
     boxSizing: "border-box",
   },
-  fileLabel: {
-    display: "block",
-    cursor: "pointer",
-    marginBottom: "8px",
-  },
+  fileLabel: { display: "block", cursor: "pointer", marginBottom: "8px" },
   filePlaceholder: {
     border: "2px dashed #ddd",
     borderRadius: "10px",
@@ -415,6 +410,24 @@ const styles = {
     objectFit: "cover",
     borderRadius: "10px",
     display: "block",
+  },
+  uploadBtn: {
+    width: "100%",
+    padding: "10px",
+    background: "#1A0A00",
+    color: "white",
+    border: "none",
+    borderRadius: "8px",
+    fontSize: "14px",
+    fontWeight: 700,
+    cursor: "pointer",
+    marginBottom: "6px",
+  },
+  uploadedBadge: {
+    fontSize: "13px",
+    color: "#16a34a",
+    fontWeight: 600,
+    padding: "6px 0",
   },
   removePhoto: {
     background: "none",

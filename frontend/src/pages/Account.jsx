@@ -28,11 +28,14 @@ export default function Account() {
   useEffect(() => { fetchUser(); }, []);
 
   const fetchUser = async () => {
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from("users")
       .select("*")
-      .eq("phone_number", phone)
-      .single();
+      .eq("phone_number", phone.toString)
+      .maybeSingle();
+    if (error) {
+      console.error("Fetch error:", error);
+    }
 
     if (data) {
       setUser(data);

@@ -1,5 +1,6 @@
 import { Routes, Route, Navigate } from "react-router-dom";
 import { useState, useEffect } from "react";
+import axios from "axios";
 import Login from "./pages/Login";
 import Dashboard from "./pages/Dashboard";
 import Booking from "./pages/Booking";
@@ -13,18 +14,29 @@ import AdminEvents from "./pages/AdminEvents";
 import Account from "./pages/Account";
 import ScannerLogin from "./pages/ScannerLogin";
 
-// ── Token verifier — DEV: just checks token exists locally ─
-// swap with real backend call when ready:
-// const { data } = await axios.post(`${API}/verify-token`, { token });
-// return data.valid === true;
+const API = import.meta.env.VITE_API_URL;
+
+// ── FIX: Real token verification via backend ──────────────────────────────────
+// Previously: verifyToken() just checked if a token string existed in
+// localStorage — any non-empty string passed. "dev-token" was accepted as valid.
+// This meant the route guard provided zero security: anyone could set
+// localStorage.setItem('userToken', 'anything') and access protected routes.
+//
+// Now: calls /verify-token on the backend which does jwt.verify() with the
+// real secret. Expired tokens, tampered tokens, and "dev-token" will all fail
+// and redirect the user to login.
 async function verifyToken(token) {
   if (!token) return false;
-  return true;
+  try {
+    const { data } = await axios.post(`${API}/verify-token`, { token });
+    return data.valid === true;
+  } catch {
+    return false;
+  }
 }
 
-// ── Generic guard — verifies a token key from localStorage ─
 function TokenGuard({ tokenKey, redirectTo, children }) {
-  const [status, setStatus] = useState("checking"); // checking | ok | fail
+  const [status, setStatus] = useState("checking");
 
   useEffect(() => {
     const token = localStorage.getItem(tokenKey);
@@ -58,47 +70,26 @@ function TokenGuard({ tokenKey, redirectTo, children }) {
   return children;
 }
 
-// ── Specific guards ───────────────────────────────────────
 function ProtectedRoute({ children }) {
-  return (
-    <TokenGuard tokenKey="userToken" redirectTo="/">
-      {children}
-    </TokenGuard>
-  );
+  return <TokenGuard tokenKey="userToken" redirectTo="/">{children}</TokenGuard>;
 }
 
 function AdminRoute({ children }) {
-  return (
-    <TokenGuard tokenKey="adminToken" redirectTo="/admin-login">
-      {children}
-    </TokenGuard>
-  );
+  return <TokenGuard tokenKey="adminToken" redirectTo="/admin-login">{children}</TokenGuard>;
 }
 
 function ScannerRoute({ children }) {
-  return (
-    <TokenGuard tokenKey="scannerToken" redirectTo="/scanner-login">
-      {children}
-    </TokenGuard>
-  );
+  return <TokenGuard tokenKey="scannerToken" redirectTo="/scanner-login">{children}</TokenGuard>;
 }
 
 function App() {
   const userToken = localStorage.getItem("userToken");
-
   return (
     <Routes>
-      {/* Root: redirect to dashboard if token exists, otherwise show login */}
-      <Route
-        path="/"
-        element={userToken ? <Navigate to="/dashboard" replace /> : <Login />}
-      />
-
-      {/* Public auth pages */}
+      <Route path="/"            element={userToken ? <Navigate to="/dashboard" replace /> : <Login />} />
       <Route path="/admin-login"   element={<AdminLogin />} />
       <Route path="/scanner-login" element={<ScannerLogin />} />
 
-      {/* User-protected routes */}
       <Route path="/dashboard" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
       <Route path="/events"    element={<ProtectedRoute><Events /></ProtectedRoute>} />
       <Route path="/slots"     element={<ProtectedRoute><Slots /></ProtectedRoute>} />
@@ -106,15 +97,11 @@ function App() {
       <Route path="/ticket"    element={<ProtectedRoute><Ticket /></ProtectedRoute>} />
       <Route path="/account"   element={<ProtectedRoute><Account /></ProtectedRoute>} />
 
-      {/* Admin-protected routes */}
       <Route path="/admin"        element={<AdminRoute><AdminDashboard /></AdminRoute>} />
       <Route path="/admin-events" element={<AdminRoute><AdminEvents /></AdminRoute>} />
 
-      {/* Scanner-protected route */}
       <Route path="/scanner" element={<ScannerRoute><Scanner /></ScannerRoute>} />
-
-      {/* Catch-all */}
-      <Route path="*" element={<Navigate to="/" replace />} />
+      <Route path="*"        element={<Navigate to="/" replace />} />
     </Routes>
   );
 }

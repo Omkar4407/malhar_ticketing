@@ -1,98 +1,92 @@
-import { useState } from "react";
-import { supabase } from "../lib/supabase";
+import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
+import axios from "axios";
 import Menu from "../components/Menu";
 
-// Only allow digits, strip everything else
+const API = import.meta.env.VITE_API_URL;
+
 const sanitizePhone = (val) => val.replace(/\D/g, "").slice(0, 10);
-// Only allow digits for OTP, max 6
-const sanitizeOtp = (val) => val.replace(/\D/g, "").slice(0, 6);
+const sanitizeOtp   = (val) => val.replace(/\D/g, "").slice(0, 6);
 
 export default function Login() {
-  const [phone, setPhone] = useState("");
-  const [otp, setOtp] = useState("");
-  const [step, setStep] = useState(1);
+  const [phone, setPhone]   = useState("");
+  const [otp, setOtp]       = useState("");
+  const [step, setStep]     = useState(1);
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
+  const [error, setError]   = useState("");
   const navigate = useNavigate();
 
-  // ── Validation ──────────────────────────────────────────
   const isValidPhone = (p) => /^[6-9]\d{9}$/.test(p);
   const isValidOtp   = (o) => /^\d{4,6}$/.test(o);
 
-  // ── Send OTP (DEV: logs to console) ─────────────────────
+  // ✅ FIX: Restore token on refresh
+  useEffect(() => {
+    const token = localStorage.getItem("userToken");
+    if (token) {
+      axios.defaults.headers.common["Authorization"] = `Bearer ${token}`;
+    }
+  }, []);
+
+  // ── Send OTP via backend ──────────────────────────────────────────────────
   const sendOtp = async () => {
     setError("");
     const cleanPhone = sanitizePhone(phone);
-
     if (!isValidPhone(cleanPhone)) {
       setError("Enter a valid 10-digit Indian mobile number.");
       return;
     }
-
     setLoading(true);
     try {
-      const fakeOtp = Math.floor(100000 + Math.random() * 900000).toString();
-      console.log(
-        `%c[DEV] OTP for +91 ${cleanPhone}: ${fakeOtp}`,
-        "color: orange; font-size: 16px; font-weight: bold;"
-      );
-      sessionStorage.setItem("dev_otp", fakeOtp);
+      await axios.post(`${API}/send-otp`, { phone: cleanPhone });
       setPhone(cleanPhone);
       setStep(2);
+    } catch (err) {
+      const msg = err.response?.data?.error;
+      setError(msg || "Failed to send OTP. Please try again.");
     } finally {
       setLoading(false);
     }
   };
 
-  // ── Verify OTP (DEV: checks against sessionStorage) ─────
+  // ── Verify OTP via backend, receive JWT ───────────────────────────────────
   const verifyOtp = async () => {
     setError("");
     const cleanOtp = sanitizeOtp(otp);
-
     if (!isValidOtp(cleanOtp)) {
-      setError("Enter the OTP sent to your number.");
+      setError("Enter the 6-digit OTP sent to your number.");
       return;
     }
-
     setLoading(true);
     try {
-      const expectedOtp = sessionStorage.getItem("dev_otp");
-      if (cleanOtp !== expectedOtp) {
-        setError("Incorrect OTP. Check your browser console.");
-        return;
-      }
+      const { data } = await axios.post(`${API}/verify-otp`, {
+        phone,
+        otp: cleanOtp,
+      });
 
-      const { error: dbErr } = await supabase
-        .from("users")
-        .upsert(
-          [{ phone_number: phone }],
-          { onConflict: "phone_number", ignoreDuplicates: false }
-        );
+      // ✅ Store token
+      localStorage.setItem("userToken", data.token);
 
-      if (dbErr) throw dbErr;
+      // ✅ FIX: Attach token globally for all future requests
+      axios.defaults.headers.common["Authorization"] = `Bearer ${data.token}`;
 
-      sessionStorage.removeItem("dev_otp");
+      // Keep phone only for UI
       localStorage.setItem("userPhone", phone);
-      localStorage.setItem("userToken", "dev-token"); // swap with real token later
+
       navigate("/dashboard");
     } catch (err) {
-      setError("Verification failed. Please try again.");
-      console.error("verifyOtp error:", err);
+      const msg = err.response?.data?.error;
+      setError(msg || "Verification failed. Please try again.");
     } finally {
       setLoading(false);
     }
   };
 
-  // ── Go back to step 1 ────────────────────────────────────
   const handleBack = () => {
     setStep(1);
     setOtp("");
     setError("");
-    sessionStorage.removeItem("dev_otp");
   };
 
-  // ── Enter key support ────────────────────────────────────
   const handleKeyDown = (e) => {
     if (e.key === "Enter") step === 1 ? sendOtp() : verifyOtp();
   };
@@ -101,13 +95,11 @@ export default function Login() {
     <>
       <Menu />
       <div style={styles.page}>
-        {/* ── Hero ── */}
         <div style={styles.hero}>
           <h1 style={styles.title}>MALHAR</h1>
           <p style={styles.subtitle}>Login to continue</p>
         </div>
 
-        {/* ── Card ── */}
         <div style={styles.card}>
           {error && <div style={styles.errorBox}>{error}</div>}
 
@@ -143,13 +135,11 @@ export default function Login() {
             </>
           ) : (
             <>
-              <label style={styles.label}>
-                OTP sent to +91 {phone}
-              </label>
+              <label style={styles.label}>OTP sent to +91 {phone}</label>
               <input
                 type="tel"
                 inputMode="numeric"
-                placeholder="Enter OTP"
+                placeholder="Enter 6-digit OTP"
                 value={otp}
                 maxLength={6}
                 onChange={(e) => setOtp(sanitizeOtp(e.target.value))}
@@ -162,10 +152,10 @@ export default function Login() {
                 onClick={verifyOtp}
                 style={{
                   ...styles.btn,
-                  opacity: loading || otp.length < 4 ? 0.6 : 1,
-                  cursor: loading || otp.length < 4 ? "not-allowed" : "pointer",
+                  opacity: loading || otp.length < 6 ? 0.6 : 1,
+                  cursor: loading || otp.length < 6 ? "not-allowed" : "pointer",
                 }}
-                disabled={loading || otp.length < 4}
+                disabled={loading || otp.length < 6}
               >
                 {loading ? "Verifying…" : "Verify OTP →"}
               </button>
@@ -175,9 +165,6 @@ export default function Login() {
             </>
           )}
         </div>
-
-        {/* ── Dev hint ── */}
-        <p style={styles.devHint}>🛠 DEV MODE — Check browser console for OTP</p>
       </div>
     </>
   );
@@ -205,11 +192,7 @@ const styles = {
     margin: "0 0 6px",
     letterSpacing: "0.06em",
   },
-  subtitle: {
-    color: "#aaa",
-    fontSize: "14px",
-    margin: 0,
-  },
+  subtitle: { color: "#aaa", fontSize: "14px", margin: 0 },
   card: {
     background: "#fff",
     padding: "24px 20px",
@@ -220,12 +203,7 @@ const styles = {
     flexDirection: "column",
     gap: "10px",
   },
-  label: {
-    fontSize: "12px",
-    fontWeight: 600,
-    color: "#666",
-    marginBottom: "2px",
-  },
+  label: { fontSize: "12px", fontWeight: 600, color: "#666", marginBottom: "2px" },
   phoneRow: {
     display: "flex",
     alignItems: "stretch",
@@ -282,11 +260,5 @@ const styles = {
     fontSize: "13px",
     padding: "8px 12px",
     borderRadius: "7px",
-  },
-  devHint: {
-    textAlign: "center",
-    fontSize: "11px",
-    color: "#aaa",
-    marginTop: "14px",
   },
 };
