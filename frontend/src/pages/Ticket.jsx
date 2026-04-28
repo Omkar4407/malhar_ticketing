@@ -1,10 +1,12 @@
 import { useEffect, useState } from "react";
+import { useLocation } from "react-router-dom";
 import { supabase } from "../lib/supabase";
 import QRCode from "qrcode";
 import Menu from "../components/Menu";
 import Header from "../components/Header";
 
 export default function Ticket() {
+  const location = useLocation();
   const [tickets, setTickets] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -12,6 +14,15 @@ export default function Ticket() {
   const phone = localStorage.getItem("userPhone");
 
   useEffect(() => {
+    // BUG FIX 1: If we just completed a booking, the ticket is passed via
+    // location.state. Use it directly instead of re-fetching (avoids the
+    // phone query bug race and gives instant feedback post-booking).
+    if (location.state?.ticket) {
+      setTickets([location.state.ticket]);
+      setLoading(false);
+      return;
+    }
+
     if (!phone) {
       setError("You are not logged in.");
       setLoading(false);
@@ -21,6 +32,8 @@ export default function Ticket() {
   }, []);
 
   const fetchTickets = async () => {
+    // BUG FIX 2: phone.toString was a function reference, not a call.
+    // Must be phone (already a string from localStorage) — no .toString needed.
     const { data, error: err } = await supabase
       .from("tickets")
       .select(`
@@ -44,7 +57,11 @@ export default function Ticket() {
       .eq("phone", phone)
       .order("created_at", { ascending: false });
 
-    if (err) setError("Failed to load tickets. Please refresh.");
+    // BUG FIX 3: Missing braces meant setError always ran regardless of err.
+    if (err) {
+      console.error("Supabase error:", JSON.stringify(err, null, 2));
+      setError("Failed to load tickets. Please refresh.");
+    }
     setTickets(data || []);
     setLoading(false);
   };

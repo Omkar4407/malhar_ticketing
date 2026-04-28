@@ -19,12 +19,21 @@ export default function Login() {
   const isValidPhone = (p) => /^[6-9]\d{9}$/.test(p);
   const isValidOtp   = (o) => /^\d{4,6}$/.test(o);
 
-  // ✅ FIX: Restore token on refresh
+  // BUG FIX 6: Verify the existing token on mount. Only redirect if the token
+  // is actually valid — not just present. This prevents a stale/expired token
+  // from causing a redirect-loop between "/" and "/dashboard".
   useEffect(() => {
     const token = localStorage.getItem("userToken");
-    if (token) {
-      axios.defaults.headers.common["Authorization"] = `Bearer ${token}`;
-    }
+    if (!token) return;
+    axios.post(`${API}/verify-token`, { token })
+      .then(({ data }) => {
+        if (data.valid) navigate("/dashboard", { replace: true });
+      })
+      .catch(() => {
+        // Invalid token — clear it and stay on login
+        localStorage.removeItem("userToken");
+        localStorage.removeItem("userPhone");
+      });
   }, []);
 
   // ── Send OTP via backend ──────────────────────────────────────────────────

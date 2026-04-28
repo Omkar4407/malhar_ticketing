@@ -83,10 +83,9 @@ function ScannerRoute({ children }) {
 }
 
 function App() {
-  const userToken = localStorage.getItem("userToken");
   return (
     <Routes>
-      <Route path="/"            element={userToken ? <Navigate to="/dashboard" replace /> : <Login />} />
+      <Route path="/"            element={<Login />} />
       <Route path="/admin-login"   element={<AdminLogin />} />
       <Route path="/scanner-login" element={<ScannerLogin />} />
 

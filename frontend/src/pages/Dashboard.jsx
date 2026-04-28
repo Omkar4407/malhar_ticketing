@@ -13,7 +13,7 @@ export default function Dashboard() {
         {/* ── Hero ── */}
         <div style={styles.hero}>
           <div style={styles.badge}>Malhar Fest</div>
-          <h1 style={styles.title}>Welcome{phone ? "!" : " Back!"}</h1>
+          <h1 style={styles.title}>Welcome{phone ? " Back!" : "!"}</h1>
           {phone && <p style={styles.subtitle}>{phone}</p>}
           <p style={styles.subtitle}>What would you like to do today?</p>
         </div>

@@ -31,7 +31,7 @@ export default function Account() {
     const { data, error } = await supabase
       .from("users")
       .select("*")
-      .eq("phone_number", phone.toString)
+      .eq("phone_number", phone)
       .maybeSingle();
     if (error) {
       console.error("Fetch error:", error);

@@ -1,3 +1,5 @@
+import { useState } from "react";
+import { supabase } from "../lib/supabase";
 import { useLocation, useNavigate } from "react-router-dom";
 import Menu from "../components/Menu";
 import Header from "../components/Header";
@@ -6,7 +8,11 @@ export default function Slots() {
   const { state } = useLocation();
   const navigate = useNavigate();
 
-  const slots = state?.slots;
+  // BUG FIX 7: Slots data passed from Events.jsx is already filtered to
+  // available-only and may be up to 5 seconds stale. Keep local state so we
+  // can refresh on demand, and re-derive isFull from fresh data.
+  const [slots, setSlots] = useState(state?.slots || null);
+  const [refreshing, setRefreshing] = useState(false);
   const event = state?.event;
 
   // Guard: if someone lands here directly without state
@@ -20,6 +26,17 @@ export default function Slots() {
       </>
     );
   }
+
+  const handleRefresh = async () => {
+    setRefreshing(true);
+    const { data } = await supabase
+      .from("slots")
+      .select("id, name, date, time, capacity, booked_count, event_id")
+      .eq("event_id", event.id)
+      .order("date", { ascending: true });
+    if (data) setSlots(data.filter((s) => s.booked_count < s.capacity));
+    setRefreshing(false);
+  };
 
   return (
     <>
@@ -45,6 +62,13 @@ export default function Slots() {
           <span style={styles.countLabel}>
             {slots.length} slot{slots.length !== 1 ? "s" : ""} available
           </span>
+          <button
+            onClick={handleRefresh}
+            disabled={refreshing}
+            style={styles.refreshBtn}
+          >
+            {refreshing ? "Refreshing…" : "↻ Refresh"}
+          </button>
         </div>
 
         {/* ── Slots ── */}
@@ -128,6 +152,9 @@ const styles = {
   },
   countRow: {
     marginBottom: "12px",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
   },
   countLabel: {
     fontSize: "12px",
@@ -195,5 +222,15 @@ const styles = {
     fontSize: "13px",
     padding: "12px",
     borderRadius: "8px",
+  },
+  refreshBtn: {
+    background: "none",
+    border: "1px solid #ddd",
+    borderRadius: "20px",
+    padding: "3px 12px",
+    fontSize: "12px",
+    fontWeight: 600,
+    color: "#FF5C1A",
+    cursor: "pointer",
   },
 };
