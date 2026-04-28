@@ -3,6 +3,8 @@ import { supabase } from "../lib/supabase";
 import { useNavigate, useLocation } from "react-router-dom";
 import axios from "axios";
 import Menu from "../components/Menu";
+import { bustSlotsCache } from "./Events";
+import { bustTicketsCache } from "./Ticket";
 
 const API = import.meta.env.VITE_API_URL;
 const ALLOWED_TYPES = ["image/jpeg", "image/jpg", "image/png", "image/webp"];
@@ -129,6 +131,10 @@ export default function Booking() {
         { headers: authHeader() }
       );
 
+      // Bust slot availability + user tickets cache so next views are fresh
+      bustSlotsCache(event.id);
+      bustTicketsCache(localStorage.getItem("userPhone"));
+
       navigate("/ticket", { state: { ticket: data.ticket } });
     } catch (err) {
       const msg = err.response?.data?.error;
@@ -184,6 +190,8 @@ export default function Booking() {
             );
 
             if (verify.data.success) {
+              bustSlotsCache(event.id);
+              bustTicketsCache(localStorage.getItem("userPhone"));
               navigate("/ticket", { state: { ticket: verify.data.ticket } });
             } else {
               setError("Payment verification failed. Please contact support.");

@@ -1,8 +1,11 @@
 import { useState } from "react";
 import { supabase } from "../lib/supabase";
+import { memGet, memSet, memBust } from "../lib/cache";
 import Menu from "../components/Menu";
 // HIGH #5: useEffect auth guard removed — ScannerRoute in App.jsx handles it centrally.
 // Having a second guard here caused a blank flash before the redirect fired.
+
+const SCANNER_TTL = 5_000; // 5s — scanner needs near-real-time checked_in status
 
 // possible states: null | "invalid" | "already_entered" | "pending" | "allowed" | "rejected"
 
@@ -19,26 +22,33 @@ export default function Scanner() {
 
     try {
       const parsed = JSON.parse(input);
+      const ticketId = parsed.ticket_id;
 
-      const { data, error } = await supabase
-        .from("tickets")
-        .select("*")
-        .eq("id", parsed.ticket_id)
-        .single();
+      // Check cache first — avoids a DB round-trip for tickets scanned recently
+      const cacheKey = `scanner:${ticketId}`;
+      const cached = memGet(cacheKey);
+      let data;
 
-      if (error || !data) {
-        setScanState("invalid");
-        setLoading(false);
-        return;
+      if (cached && Date.now() - cached.ts < SCANNER_TTL) {
+        data = cached.data;
+      } else {
+        const { data: row, error } = await supabase
+          .from("tickets")
+          .select("*")
+          .eq("id", ticketId)
+          .single();
+
+        if (error || !row) {
+          setScanState("invalid");
+          setLoading(false);
+          return;
+        }
+        data = row;
+        memSet(cacheKey, data);
       }
 
       setTicket(data);
-
-      if (data.checked_in) {
-        setScanState("already_entered");
-      } else {
-        setScanState("pending");
-      }
+      setScanState(data.checked_in ? "already_entered" : "pending");
     } catch {
       setScanState("invalid");
     }
@@ -52,6 +62,9 @@ export default function Scanner() {
       .from("tickets")
       .update({ checked_in: true, checked_in_at: new Date().toISOString() })
       .eq("id", ticket.id);
+
+    // Bust the scanner cache for this ticket so a re-scan shows "already entered"
+    memBust(`scanner:${ticket.id}`);
     setScanState("allowed");
     setLoading(false);
   };

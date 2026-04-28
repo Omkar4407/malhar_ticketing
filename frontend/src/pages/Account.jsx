@@ -1,11 +1,13 @@
 import { useEffect, useState, useRef } from "react";
 import { supabase } from "../lib/supabase";
+import { lsCached, lsBust } from "../lib/cache";
 import Menu from "../components/Menu";
 import Header from "../components/Header";
 
 // MED #4: Allowed MIME types and max file size
 const ALLOWED_TYPES = ["image/jpeg", "image/jpg", "image/png", "image/webp"];
 const MAX_SIZE_BYTES = 5 * 1024 * 1024; // 5MB
+const PROFILE_TTL = 5 * 60_000; // 5 minutes — profile rarely changes
 
 export default function Account() {
   const phone = localStorage.getItem("userPhone");
@@ -28,22 +30,26 @@ export default function Account() {
   useEffect(() => { fetchUser(); }, []);
 
   const fetchUser = async () => {
-    const { data, error } = await supabase
-      .from("users")
-      .select("*")
-      .eq("phone_number", phone)
-      .maybeSingle();
-    if (error) {
-      console.error("Fetch error:", error);
-    }
-
-    if (data) {
-      setUser(data);
-      setForm({
-        full_name: data.full_name || "",
-        email: data.email || "",
-        college: data.college || "",
+    try {
+      const data = await lsCached(`profile:${phone}`, PROFILE_TTL, async () => {
+        const { data: row, error } = await supabase
+          .from("users")
+          .select("*")
+          .eq("phone_number", phone)
+          .maybeSingle();
+        if (error) throw error;
+        return row;
       });
+      if (data) {
+        setUser(data);
+        setForm({
+          full_name: data.full_name || "",
+          email: data.email || "",
+          college: data.college || "",
+        });
+      }
+    } catch (err) {
+      console.error("Fetch error:", err);
     }
     setLoading(false);
   };
@@ -114,6 +120,8 @@ export default function Account() {
       console.error("Profile update error:", updateErr);
       showToast("error", "Update failed. Please try again.");
     } else {
+      // Bust the profile cache so the next load gets the updated data
+      lsBust(`profile:${phone}`);
       showToast("success", "Profile updated successfully!");
       fetchUser();
       setPhoto(null);

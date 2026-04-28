@@ -1,55 +1,41 @@
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState } from "react";
 import { supabase } from "../lib/supabase";
+import { cached, memBust } from "../lib/cache";
 import { useNavigate } from "react-router-dom";
 import Header from "../components/Header";
 import Menu from "../components/Menu";
 
-// ── FIX: Simple in-memory cache for events and slots ─────────────────────────
-// Problem: With 20k users on the events page simultaneously, every user fires
-// SELECT * FROM events on page load. That's 20k identical queries hitting
-// Supabase at once. Events don't change during a festival — they're effectively
-// static. A 10-second TTL cache means Supabase only sees ~1 query per 10s
-// regardless of concurrent visitors, collapsing 20k queries to almost nothing.
-//
-// Same applies to slots: when 20k users click the same event, 20k
-// SELECT * FROM slots WHERE event_id = X queries fire simultaneously.
-// The slots cache with a 5-second TTL handles this the same way.
-// 5s TTL means availability counts lag by at most 5 seconds — acceptable.
-const EVENTS_CACHE_TTL = 10_000;   // 10 seconds
-const SLOTS_CACHE_TTL  =  5_000;   //  5 seconds
-
-const eventsCache = { data: null, ts: 0 };
-const slotsCache  = {};   // keyed by event_id
+// TTLs — events list: 30s (rarely changes), slots: 10s (booked_count moves)
+const EVENTS_TTL = 30_000;
+const SLOTS_TTL  = 10_000;
 
 async function getEvents() {
-  const now = Date.now();
-  if (eventsCache.data && now - eventsCache.ts < EVENTS_CACHE_TTL) {
-    return eventsCache.data;
-  }
-  const { data, error } = await supabase
-    .from("events")
-    .select("id, name, type, price, created_at")
-    .order("created_at", { ascending: true });
-  if (error) throw error;
-  eventsCache.data = data || [];
-  eventsCache.ts   = now;
-  return eventsCache.data;
+  return cached("events", EVENTS_TTL, async () => {
+    const { data, error } = await supabase
+      .from("events")
+      .select("id, name, type, price, created_at")
+      .order("created_at", { ascending: true });
+    if (error) throw error;
+    return data || [];
+  });
 }
 
 async function getSlots(eventId) {
-  const now = Date.now();
-  const cached = slotsCache[eventId];
-  if (cached && now - cached.ts < SLOTS_CACHE_TTL) {
-    return cached.data;
-  }
-  const { data, error } = await supabase
-    .from("slots")
-    .select("id, name, date, time, capacity, booked_count, event_id")
-    .eq("event_id", eventId)
-    .order("date", { ascending: true });
-  if (error) throw error;
-  slotsCache[eventId] = { data: data || [], ts: now };
-  return slotsCache[eventId].data;
+  return cached(`slots:${eventId}`, SLOTS_TTL, async () => {
+    const { data, error } = await supabase
+      .from("slots")
+      .select("id, name, date, time, capacity, booked_count, event_id")
+      .eq("event_id", eventId)
+      .order("date", { ascending: true });
+    if (error) throw error;
+    return data || [];
+  });
+}
+
+// Call this after any booking to force-fresh slot counts on next load
+export function bustSlotsCache(eventId) {
+  if (eventId) memBust(`slots:${eventId}`);
+  else memBust("events"); // bust all if eventId unknown
 }
 
 export default function Events() {

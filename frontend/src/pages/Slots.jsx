@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { supabase } from "../lib/supabase";
+import { memBust } from "../lib/cache";
 import { useLocation, useNavigate } from "react-router-dom";
 import Menu from "../components/Menu";
 import Header from "../components/Header";
@@ -29,6 +30,8 @@ export default function Slots() {
 
   const handleRefresh = async () => {
     setRefreshing(true);
+    // Bust the events-page cache for this event's slots so it's also fresh there
+    memBust(`slots:${event.id}`);
     const { data } = await supabase
       .from("slots")
       .select("id, name, date, time, capacity, booked_count, event_id")

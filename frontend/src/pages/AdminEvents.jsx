@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { supabase } from "../lib/supabase";
+import { memBustPrefix, cached } from "../lib/cache";
 import Menu from "../components/Menu";
 
 // ─── Per-event slot add form ─────────────────────────────────────────────────
@@ -262,6 +263,17 @@ function EventCard({ event, slots, onUpdated, onDeleted }) {
 }
 
 // ─── Main page ───────────────────────────────────────────────────────────────
+// Admin data is cached for 15s. Any mutation (add/edit/delete event or slot)
+// calls bustAdminCache() which forces the next fetchAll() to hit the DB.
+// This prevents the "save then immediately see stale data" problem while
+// still collapsing the many redundant fetches that occur during normal browsing.
+
+const ADMIN_TTL = 15_000; // 15 seconds
+
+function bustAdminCache() {
+  memBustPrefix("admin:");
+}
+
 export default function AdminEvents() {
   const [events, setEvents] = useState([]);
   const [slots, setSlots] = useState([]);
@@ -270,15 +282,28 @@ export default function AdminEvents() {
   const [saving, setSaving] = useState(false);
   const [addError, setAddError] = useState("");
 
-  const fetchAll = async () => {
-    const [{ data: e, error: eErr }, { data: s, error: sErr }] = await Promise.all([
-      supabase.from("events").select("*").order("created_at", { ascending: false }),
-      supabase.from("slots").select("*").order("created_at", { ascending: true }),
-    ]);
-    if (eErr) console.error("Events fetch error:", eErr);
-    if (sErr) console.error("Slots fetch error:", sErr);
-    setEvents(e || []);
-    setSlots(s || []);
+  const fetchAll = async (forceBust = false) => {
+    if (forceBust) bustAdminCache();
+    try {
+      const [eventsData, slotsData] = await Promise.all([
+        cached("admin:events", ADMIN_TTL, async () => {
+          const { data, error } = await supabase
+            .from("events").select("*").order("created_at", { ascending: false });
+          if (error) throw error;
+          return data || [];
+        }),
+        cached("admin:slots", ADMIN_TTL, async () => {
+          const { data, error } = await supabase
+            .from("slots").select("*").order("created_at", { ascending: true });
+          if (error) throw error;
+          return data || [];
+        }),
+      ]);
+      setEvents(eventsData);
+      setSlots(slotsData);
+    } catch (err) {
+      console.error("Admin fetch error:", err);
+    }
     setLoading(false);
   };
 
@@ -303,7 +328,7 @@ export default function AdminEvents() {
       return;
     }
     setNewEvent({ name: "", price: "" });
-    fetchAll();
+    fetchAll(true); // force-bust so new event appears immediately
   };
 
   return (
@@ -362,8 +387,8 @@ export default function AdminEvents() {
               key={event.id}
               event={event}
               slots={slots}
-              onUpdated={fetchAll}
-              onDeleted={fetchAll}
+              onUpdated={() => fetchAll(true)}
+              onDeleted={() => fetchAll(true)}
             />
           ))
         )}

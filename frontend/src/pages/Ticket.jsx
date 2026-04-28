@@ -1,9 +1,18 @@
 import { useEffect, useState } from "react";
 import { useLocation } from "react-router-dom";
 import { supabase } from "../lib/supabase";
+import { lsCached, lsBust } from "../lib/cache";
 import QRCode from "qrcode";
 import Menu from "../components/Menu";
 import Header from "../components/Header";
+
+// Bust this whenever a new booking is made so the list is always fresh
+// after a booking flow completes. Called from Booking.jsx post-success.
+export function bustTicketsCache(phone) {
+  lsBust(`tickets:${phone}`);
+}
+
+const TICKETS_TTL = 30_000; // 30 seconds — tickets rarely change mid-session
 
 export default function Ticket() {
   const location = useLocation();
@@ -14,10 +23,11 @@ export default function Ticket() {
   const phone = localStorage.getItem("userPhone");
 
   useEffect(() => {
-    // BUG FIX 1: If we just completed a booking, the ticket is passed via
-    // location.state. Use it directly instead of re-fetching (avoids the
-    // phone query bug race and gives instant feedback post-booking).
+    // If we just completed a booking, the fresh ticket arrives via
+    // location.state. Use it directly, bust the cache so next load
+    // fetches the full updated list, and skip the network call.
     if (location.state?.ticket) {
+      bustTicketsCache(phone);
       setTickets([location.state.ticket]);
       setLoading(false);
       return;
@@ -32,38 +42,40 @@ export default function Ticket() {
   }, []);
 
   const fetchTickets = async () => {
-    // BUG FIX 2: phone.toString was a function reference, not a call.
-    // Must be phone (already a string from localStorage) — no .toString needed.
-    const { data, error: err } = await supabase
-      .from("tickets")
-      .select(`
-        id,
-        name,
-        college,
-        phone,
-        photo_url,
-        checked_in,
-        checked_in_at,
-        payment_status,
-        slot_id,
-        event_id,
-        slots (
-          name,
-          date,
-          time,
-          events ( name )
-        )
-      `)
-      .eq("phone", phone)
-      .order("created_at", { ascending: false });
-
-    // BUG FIX 3: Missing braces meant setError always ran regardless of err.
-    if (err) {
-      console.error("Supabase error:", JSON.stringify(err, null, 2));
+    try {
+      const data = await lsCached(`tickets:${phone}`, TICKETS_TTL, async () => {
+        const { data: rows, error: err } = await supabase
+          .from("tickets")
+          .select(`
+            id,
+            name,
+            college,
+            phone,
+            photo_url,
+            checked_in,
+            checked_in_at,
+            payment_status,
+            slot_id,
+            event_id,
+            slots (
+              name,
+              date,
+              time,
+              events ( name )
+            )
+          `)
+          .eq("phone", phone)
+          .order("created_at", { ascending: false });
+        if (err) throw err;
+        return rows || [];
+      });
+      setTickets(data);
+    } catch (err) {
+      console.error("Tickets fetch error:", err);
       setError("Failed to load tickets. Please refresh.");
+    } finally {
+      setLoading(false);
     }
-    setTickets(data || []);
-    setLoading(false);
   };
 
   return (
