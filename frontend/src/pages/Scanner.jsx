@@ -26,6 +26,7 @@ export default function Scanner() {
   const [loading, setLoading]           = useState(false);
   const [cameraActive, setCameraActive] = useState(false);
   const [cameraError, setCameraError]   = useState("");
+  const isFrontCamera = useRef(false);  // track facing mode for mirror logic
   const html5QrRef = useRef(null);
 
   // ── Camera ──────────────────────────────────────────────────────────────────
@@ -45,35 +46,48 @@ export default function Scanner() {
       await scanner.start(
         { facingMode: "environment" },
         {
-          fps: 30,                        // higher FPS = faster detection
-          qrbox: (w, h) => {             // dynamic box — 80% of the smaller dimension
+          fps: 30,
+          qrbox: (w, h) => {
             const size = Math.min(w, h) * 0.8;
             return { width: size, height: size };
           },
           aspectRatio: 1.0,
-          disableFlip: false,            // detect mirrored codes too
+          disableFlip: false,
           experimentalFeatures: {
-            useBarCodeDetectorIfSupported: true, // native BarcodeDetector API — much faster
+            useBarCodeDetectorIfSupported: true,
           },
           rememberLastUsedCamera: true,
         },
         (decodedText) => {
-          // Ignore if a scan is already being processed
           if (scanningRef.current) return;
           scanningRef.current = true;
           setInput(decodedText);
           processTicket(decodedText);
-          // Camera stays ON — user clicks "Scan Again" to clear result
-          // and scanningRef is reset in handleReset
         },
         () => {}
       );
       setCameraActive(true);
 
-      // Mirror the video element Html5Qrcode injects
+      // Detect actual facing mode from the live stream track settings.
+      // Only mirror for front/user-facing cameras — back cameras must NOT be mirrored.
       requestAnimationFrame(() => {
         const video = document.querySelector(`#${QR_DIV_ID} video`);
-        if (video) video.style.transform = "scaleX(-1)";
+        if (!video) return;
+
+        // Try to read facingMode from the actual stream track
+        let actualFacing = "environment"; // safe default
+        try {
+          const stream = video.srcObject;
+          if (stream) {
+            const track = stream.getVideoTracks()[0];
+            const settings = track?.getSettings?.();
+            if (settings?.facingMode) actualFacing = settings.facingMode;
+          }
+        } catch (_) {}
+
+        isFrontCamera.current = actualFacing === "user";
+        // Mirror only front/selfie cameras
+        video.style.transform = isFrontCamera.current ? "scaleX(-1)" : "none";
       });
 
     } catch (err) {
@@ -426,26 +440,84 @@ const styles = {
     padding: "20px",
     pointerEvents: "none",
   },
-  errBox: { background: "#fff0f0", border: "1px solid #fdd", color: "#d0312d", fontSize: "13px", padding: "8px 12px", borderRadius: "8px" },
-  camBtn: { width: "100%", padding: "12px", background: "#1A0A00", color: "white", border: "none", borderRadius: "10px", fontSize: "15px", fontWeight: 700, cursor: "pointer" },
-  divRow: { display: "flex", alignItems: "center", gap: "10px" },
-  hr: { flex: 1, border: "none", borderTop: "1px solid #eee" },
-  orText: { color: "#aaa", fontSize: "12px", whiteSpace: "nowrap" },
-  input: { width: "100%", padding: "12px", borderRadius: "10px", border: "1px solid #ddd", fontSize: "14px", boxSizing: "border-box", outline: "none" },
+  errBox: { 
+    background: "#fff0f0", 
+    border: "1px solid #fdd", 
+    color: "#d0312d", 
+    fontSize: "13px", 
+    padding: "8px 12px", 
+    borderRadius: "8px" 
+  },
+  camBtn: { 
+    width: "100%", 
+    padding: "12px", 
+    background: "#1A0A00", 
+    color: "white", 
+    border: "none", 
+    borderRadius: "10px", 
+    fontSize: "15px", 
+    fontWeight: 700, 
+    cursor: "pointer" 
+  },
+  divRow: { 
+    display: "flex", 
+    alignItems: "center", 
+    gap: "10px" 
+  },
+  hr: { 
+    flex: 1, 
+    border: "none", 
+    borderTop: "1px solid #eee" 
+  },
+  orText: { 
+    color: "#aaa", 
+    fontSize: "12px", 
+    whiteSpace: "nowrap" 
+  },
+  input: { 
+    width: "100%", 
+    padding: "12px", 
+    borderRadius: "10px", 
+    border: "1px solid #ddd", 
+    fontSize: "14px", 
+    boxSizing: "border-box", 
+    outline: "none" 
+  },
   expandBtn: {
-    position: "absolute", top: "10px", right: "10px",
-    background: "rgba(0,0,0,0.55)", backdropFilter: "blur(4px)",
-    border: "none", borderRadius: "8px",
-    color: "white", fontSize: "18px", lineHeight: 1,
-    width: "36px", height: "36px",
-    cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center",
+    position: "absolute", 
+    top: "10px", 
+    right: "10px",
+    background: "rgba(0,0,0,0.55)", 
+    backdropFilter: "blur(4px)",
+    border: "none", 
+    borderRadius: "8px",
+    color: "white", 
+    fontSize: "18px", 
+    lineHeight: 1,
+    width: "36px", 
+    height: "36px",
+    cursor: "pointer", 
+    display: "flex", 
+    alignItems: "center", 
+    justifyContent: "center",
   },
   collapseBtn: {
-    position: "fixed", top: "16px", right: "16px", zIndex: 1001,
-    background: "rgba(255,255,255,0.15)", backdropFilter: "blur(4px)",
-    border: "2px solid rgba(255,255,255,0.3)", borderRadius: "50%",
-    color: "white", fontSize: "18px", fontWeight: 700,
-    width: "42px", height: "42px",
-    cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center",
+    position: "fixed", 
+    top: "16px", 
+    right: "16px", 
+    zIndex: 1001,
+    background: "rgba(255,255,255,0.15)", 
+    backdropFilter: "blur(4px)",
+    border: "2px solid rgba(255,255,255,0.3)", 
+    borderRadius: "50%",
+    color: "white", 
+    fontSize: "18px", 
+    fontWeight: 700,
+    width: "42px", 
+    height: "42px",
+    cursor: "pointer", 
+    display: "flex", 
+    alignItems: "center", 
+    justifyContent: "center",
   },
 };
