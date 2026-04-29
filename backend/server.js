@@ -13,6 +13,11 @@ import eventsRoutes  from "./routes/events.routes.js";
 
 const app = express();
 
+// Render (and most cloud platforms) sit behind a reverse proxy.
+// This tells Express to trust the X-Forwarded-For header so
+// express-rate-limit can correctly identify client IPs.
+app.set("trust proxy", 1);
+
 // ── CORS ──────────────────────────────────────────────────────────────────────
 const allowedOrigins = (process.env.ALLOWED_ORIGINS || "")
   .split(",")
