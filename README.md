@@ -118,38 +118,6 @@ RAZORPAY_KEY_SECRET=your_secret
 
 ---
 
-## 🔹 STEP 5 — SUPABASE SETUP
-
-Create tables:
-
-### users
-
-* phone_number
-
-### events
-
-* id
-* name
-* price
-
-### slots
-
-* id
-* event_id
-* time
-
-### tickets
-
-* id
-* name
-* phone
-* slot_id
-* event_id
-* photo_url
-* payment_status
-* checked_in
-
----
 
 # 🔄 COMPLETE PROJECT FLOW
 
