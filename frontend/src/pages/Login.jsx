@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import axios from "axios";
 import Menu from "../components/Menu";
@@ -14,14 +14,28 @@ export default function Login() {
   const [step, setStep]     = useState(1);
   const [loading, setLoading] = useState(false);
   const [error, setError]   = useState("");
+  const [resendCountdown, setResendCountdown] = useState(0);
+  const countdownRef = useRef(null);
   const navigate = useNavigate();
 
   const isValidPhone = (p) => /^[6-9]\d{9}$/.test(p);
   const isValidOtp   = (o) => /^\d{4,6}$/.test(o);
 
-  // BUG FIX 6: Verify the existing token on mount. Only redirect if the token
-  // is actually valid — not just present. This prevents a stale/expired token
-  // from causing a redirect-loop between "/" and "/dashboard".
+  // Start a 30-second resend cooldown after OTP is sent
+  const startResendCooldown = () => {
+    if (countdownRef.current) clearInterval(countdownRef.current);
+    setResendCountdown(30);
+    countdownRef.current = setInterval(() => {
+      setResendCountdown((v) => {
+        if (v <= 1) { clearInterval(countdownRef.current); return 0; }
+        return v - 1;
+      });
+    }, 1000);
+  };
+
+  useEffect(() => () => { if (countdownRef.current) clearInterval(countdownRef.current); }, []);
+
+  // Verify the existing token on mount — only redirect if valid
   useEffect(() => {
     const token = localStorage.getItem("userToken");
     if (!token) return;
@@ -30,7 +44,6 @@ export default function Login() {
         if (data.valid) navigate("/dashboard", { replace: true });
       })
       .catch(() => {
-        // Invalid token — clear it and stay on login
         localStorage.removeItem("userToken");
         localStorage.removeItem("userPhone");
       });
@@ -49,9 +62,27 @@ export default function Login() {
       await axios.post(`${API}/send-otp`, { phone: cleanPhone });
       setPhone(cleanPhone);
       setStep(2);
+      startResendCooldown();
     } catch (err) {
       const msg = err.response?.data?.error;
       setError(msg || "Failed to send OTP. Please try again.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // ── Resend OTP (only allowed when countdown reaches 0) ───────────────────
+  const resendOtp = async () => {
+    if (resendCountdown > 0 || loading) return;
+    setOtp("");
+    setError("");
+    setLoading(true);
+    try {
+      await axios.post(`${API}/send-otp`, { phone });
+      startResendCooldown();
+    } catch (err) {
+      const msg = err.response?.data?.error;
+      setError(msg || "Failed to resend OTP. Please try again.");
     } finally {
       setLoading(false);
     }
@@ -72,13 +103,8 @@ export default function Login() {
         otp: cleanOtp,
       });
 
-      // ✅ Store token
       localStorage.setItem("userToken", data.token);
-
-      // ✅ FIX: Attach token globally for all future requests
       axios.defaults.headers.common["Authorization"] = `Bearer ${data.token}`;
-
-      // Keep phone only for UI
       localStorage.setItem("userPhone", phone);
 
       navigate("/dashboard");
@@ -94,6 +120,8 @@ export default function Login() {
     setStep(1);
     setOtp("");
     setError("");
+    if (countdownRef.current) clearInterval(countdownRef.current);
+    setResendCountdown(0);
   };
 
   const handleKeyDown = (e) => {
@@ -168,6 +196,22 @@ export default function Login() {
               >
                 {loading ? "Verifying…" : "Verify OTP →"}
               </button>
+
+              {/* Resend OTP button */}
+              <button
+                onClick={resendOtp}
+                disabled={resendCountdown > 0 || loading}
+                style={{
+                  ...styles.resendBtn,
+                  opacity: resendCountdown > 0 || loading ? 0.5 : 1,
+                  cursor: resendCountdown > 0 || loading ? "not-allowed" : "pointer",
+                }}
+              >
+                {resendCountdown > 0
+                  ? `Resend OTP in ${resendCountdown}s`
+                  : "Resend OTP"}
+              </button>
+
               <button onClick={handleBack} style={styles.backBtn} disabled={loading}>
                 ← Change number
               </button>
@@ -250,6 +294,18 @@ const styles = {
     fontSize: "15px",
     fontWeight: 700,
     cursor: "pointer",
+    transition: "opacity 0.15s",
+  },
+  resendBtn: {
+    background: "none",
+    border: "1px solid #ddd",
+    borderRadius: "8px",
+    color: "#FF5C1A",
+    fontSize: "13px",
+    fontWeight: 600,
+    cursor: "pointer",
+    padding: "8px",
+    textAlign: "center",
     transition: "opacity 0.15s",
   },
   backBtn: {

@@ -1,5 +1,4 @@
 import { useState } from "react";
-import { supabase } from "../lib/supabase";
 import { useNavigate } from "react-router-dom";
 import axios from "axios";
 
@@ -20,35 +19,24 @@ export default function AdminLogin() {
     setLoading(true);
     setError("");
 
-    // Step 1: verify password server-side (password never compared in browser)
-    let adminToken;
+    // Email + password both sent to backend. Backend verifies password AND
+    // checks the email against admins table before issuing the JWT.
+    // This fixes the race condition where a token was issued before the
+    // client-side DB check — the token is now ONLY issued if the email is valid.
     try {
-      const { data: tokenData } = await axios.post(`${import.meta.env.VITE_API_URL}/admin-login`, { password });
-      adminToken = tokenData.token;
+      const { data } = await axios.post(`${import.meta.env.VITE_API_URL}/admin-login`, {
+        email: email.trim().toLowerCase(),
+        password,
+      });
+
+      localStorage.setItem("adminToken", data.token);
+      localStorage.setItem("admin", JSON.stringify(data.admin));
+      navigate("/admin");
     } catch (err) {
-      setError(err?.response?.data?.error || "Incorrect password.");
+      setError(err?.response?.data?.error || "Login failed. Please check your credentials.");
+    } finally {
       setLoading(false);
-      return;
     }
-
-    // Step 2: confirm email exists as super_admin in DB
-    const { data, error: dbError } = await supabase
-      .from("admins")
-      .select("*")
-      .eq("email", email.trim().toLowerCase())
-      .eq("role", "super_admin")
-      .single();
-
-    setLoading(false);
-
-    if (dbError || !data) {
-      setError("Access denied. This email is not authorised as a super admin.");
-      return;
-    }
-
-    localStorage.setItem("adminToken", adminToken);
-    localStorage.setItem("admin", JSON.stringify(data));
-    navigate("/admin");
   };
 
   return (

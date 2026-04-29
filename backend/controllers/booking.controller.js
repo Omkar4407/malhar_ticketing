@@ -4,7 +4,23 @@ import {
   verifyRazorpaySignature,
   bookSlot,
   fetchTicketById,
+  fetchTicketsByPhone,
 } from "../services/booking.service.js";
+
+// ── GET /my-tickets ───────────────────────────────────────────────────────────
+// Returns all tickets for the authenticated user. Phone comes from the JWT
+// (set by requireUserToken middleware) — never trusted from the request body.
+// Uses service-role key on the backend so Supabase RLS on the tickets table
+// never blocks the read, regardless of how policies are configured.
+export async function getMyTickets(req, res) {
+  try {
+    const tickets = await fetchTicketsByPhone(req.userPhone);
+    return res.json({ tickets });
+  } catch (err) {
+    console.error("get-my-tickets error:", err);
+    return res.status(500).json({ error: "Failed to fetch tickets." });
+  }
+}
 
 // ── POST /create-order ────────────────────────────────────────────────────────
 export async function createOrder(req, res) {
@@ -52,9 +68,19 @@ export async function verifyPayment(req, res) {
       return res.status(400).json({ success: false, error: "Payment signature mismatch." });
     }
 
+    const trimmedName = name?.trim();
+    const trimmedCollege = college?.trim();
+
+    if (!trimmedName || trimmedName.length > 100) {
+      return res.status(400).json({ success: false, error: "Invalid name." });
+    }
+    if (!trimmedCollege || trimmedCollege.length > 150) {
+      return res.status(400).json({ success: false, error: "Invalid college name." });
+    }
+
     const result = await bookSlot(slot_id, {
-      name: name?.trim(),
-      college: college?.trim(),
+      name: trimmedName,
+      college: trimmedCollege,
       phone: req.userPhone, // always from JWT
       event_id,
       photo_url,
@@ -82,6 +108,12 @@ export async function bookFree(req, res) {
 
     if (!name || !college || !slot_id || !event_id) {
       return res.status(400).json({ error: "Missing required fields." });
+    }
+    if (name.trim().length > 100) {
+      return res.status(400).json({ error: "Name must be 100 characters or fewer." });
+    }
+    if (college.trim().length > 150) {
+      return res.status(400).json({ error: "College name must be 150 characters or fewer." });
     }
 
     const result = await bookSlot(slot_id, {

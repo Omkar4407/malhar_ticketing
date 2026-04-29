@@ -47,9 +47,11 @@ export default function Booking() {
   }
 
   const validate = () => {
-    if (!name.trim())    return "Please enter your name.";
-    if (!college.trim()) return "Please enter your college name.";
-    if (!photoUrl)       return "Please upload a photo first.";
+    if (!name.trim())         return "Please enter your name.";
+    if (name.trim().length > 100) return "Name must be 100 characters or fewer.";
+    if (!college.trim())      return "Please enter your college name.";
+    if (college.trim().length > 150) return "College name must be 150 characters or fewer.";
+    if (!photoUrl)            return "Please upload a photo first.";
     return null;
   };
 
@@ -133,7 +135,7 @@ export default function Booking() {
 
       // Bust slot availability + user tickets cache so next views are fresh
       bustSlotsCache(event.id);
-      bustTicketsCache(localStorage.getItem("userPhone"));
+      bustTicketsCache();
 
       navigate("/ticket", { state: { ticket: data.ticket } });
     } catch (err) {
@@ -191,7 +193,7 @@ export default function Booking() {
 
             if (verify.data.success) {
               bustSlotsCache(event.id);
-              bustTicketsCache(localStorage.getItem("userPhone"));
+              bustTicketsCache();
               navigate("/ticket", { state: { ticket: verify.data.ticket } });
             } else {
               setError("Payment verification failed. Please contact support.");
@@ -251,6 +253,7 @@ export default function Booking() {
             value={name}
             onChange={(e) => { setName(e.target.value); if (error) setError(""); }}
             style={styles.input}
+            maxLength={100}
             autoFocus
           />
 
@@ -261,6 +264,7 @@ export default function Booking() {
             value={college}
             onChange={(e) => { setCollege(e.target.value); if (error) setError(""); }}
             style={styles.input}
+            maxLength={150}
           />
 
           {/* ── Photo — upload as explicit step ── */}

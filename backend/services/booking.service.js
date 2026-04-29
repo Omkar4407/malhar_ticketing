@@ -19,9 +19,11 @@ export function verifyRazorpaySignature({ razorpay_order_id, razorpay_payment_id
 }
 
 // ── Check slot availability (cached 5s) ───────────────────────────────────────
-// The pre-check before opening Razorpay is informational — the real atomic
-// guard is inside book_slot() RPC. Caching 5s here cuts DB reads during a
-// booking rush where many users check the same popular slot simultaneously.
+// Two conditions must both be true for a slot to accept bookings:
+//   1. is_released = true  (admin has opened the slot)
+//   2. booked_count < capacity  (seats still available)
+// This pre-check is informational — the real atomic guard lives inside the
+// book_slot() RPC. Caching 5s cuts DB reads during a booking rush.
 export async function checkSlotAvailable(slot_id) {
   const slot = await cacheGet(
     `slot:${slot_id}`,
@@ -29,13 +31,15 @@ export async function checkSlotAvailable(slot_id) {
     async () => {
       const { data } = await adminSupabase
         .from("slots")
-        .select("capacity, booked_count")
+        .select("capacity, booked_count, is_released")
         .eq("id", slot_id)
         .single();
       return data;
     }
   );
-  return slot && slot.booked_count < slot.capacity;
+  if (!slot) return false;
+  if (!slot.is_released) return false;       // slot not released by admin
+  return slot.booked_count < slot.capacity;  // still has seats
 }
 
 // ── Create Razorpay order with idempotency receipt ────────────────────────────
@@ -86,4 +90,33 @@ export async function upsertUser(phone) {
   await adminSupabase
     .from("users")
     .upsert([{ phone_number: phone }], { onConflict: "phone_number", ignoreDuplicates: true });
+}
+
+// ── Fetch all tickets for a user (by phone from JWT) ─────────────────────────
+// Uses service-role key — bypasses RLS entirely so anon-key policies
+// on the tickets table never block this read.
+export async function fetchTicketsByPhone(phone) {
+  const { data, error } = await adminSupabase
+    .from("tickets")
+    .select(`
+      id,
+      name,
+      college,
+      phone,
+      photo_url,
+      checked_in,
+      checked_in_at,
+      rejected,
+      payment_status,
+      slot_id,
+      event_id,
+      slots!tickets_slot_id_fkey (
+        id, name, date, time,
+        events!slots_event_id_fkey ( id, name )
+      )
+    `)
+    .eq("phone", phone)
+    .order("created_at", { ascending: false });
+  if (error) throw error;
+  return data || [];
 }

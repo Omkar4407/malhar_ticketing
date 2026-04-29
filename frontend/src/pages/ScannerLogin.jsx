@@ -1,6 +1,5 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { supabase } from "../lib/supabase";
 import Header from "../components/Header";
 import axios from "axios";
 
@@ -22,36 +21,25 @@ export default function ScannerLogin() {
 
     setLoading(true);
 
-    // Step 1: verify password server-side (password never compared in browser)
-    let scannerToken;
+    // Email + password both sent to backend. Backend verifies password AND
+    // checks the email against admins table (role=admin) before issuing JWT.
+    // This fixes the previous race condition where the token was issued
+    // before the client-side email check.
     try {
-      const { data: tokenData } = await axios.post(`${import.meta.env.VITE_API_URL}/scanner-login`, { password });
-      scannerToken = tokenData.token;
+      const { data } = await axios.post(`${import.meta.env.VITE_API_URL}/scanner-login`, {
+        email: email.trim().toLowerCase(),
+        password,
+      });
+
+      localStorage.setItem("scannerToken", data.token);
+      localStorage.setItem("scannerAuth", "true");
+      localStorage.setItem("scannerEmail", data.admin.email);
+      navigate("/scanner");
     } catch (err) {
-      setError(err?.response?.data?.error || "Incorrect password.");
+      setError(err?.response?.data?.error || "Access denied. Check your credentials.");
+    } finally {
       setLoading(false);
-      return;
     }
-
-    // Step 2: confirm email exists as admin in DB
-    const { data, error: dbError } = await supabase
-      .from("admins")
-      .select("id, email, role")
-      .eq("email", email.trim().toLowerCase())
-      .eq("role", "admin")
-      .single();
-
-    setLoading(false);
-
-    if (dbError || !data) {
-      setError("Access denied. Email not found or not authorized.");
-      return;
-    }
-
-    localStorage.setItem("scannerToken", scannerToken);
-    localStorage.setItem("scannerAuth", "true");
-    localStorage.setItem("scannerEmail", data.email);
-    navigate("/scanner");
   };
 
   const handleKey = (e) => {

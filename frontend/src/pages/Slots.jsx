@@ -1,23 +1,75 @@
-import { useState } from "react";
-import { supabase } from "../lib/supabase";
-import { memBust } from "../lib/cache";
+import { useState, useEffect } from "react";
+import axios from "axios";
 import { useLocation, useNavigate } from "react-router-dom";
 import Menu from "../components/Menu";
 import Header from "../components/Header";
 
+const API = import.meta.env.VITE_API_URL;
+
+// Persist event + slots to sessionStorage so a browser refresh can re-hydrate
+function saveToSession(event, slots) {
+  try {
+    sessionStorage.setItem("slots_event", JSON.stringify(event));
+    sessionStorage.setItem("slots_data",  JSON.stringify(slots));
+  } catch (_) {}
+}
+
+function loadFromSession() {
+  try {
+    const event = JSON.parse(sessionStorage.getItem("slots_event"));
+    const slots = JSON.parse(sessionStorage.getItem("slots_data"));
+    return { event, slots };
+  } catch (_) {
+    return { event: null, slots: null };
+  }
+}
+
 export default function Slots() {
-  const { state } = useLocation();
-  const navigate = useNavigate();
+  const { state }  = useLocation();
+  const navigate   = useNavigate();
 
-  // BUG FIX 7: Slots data passed from Events.jsx is already filtered to
-  // available-only and may be up to 5 seconds stale. Keep local state so we
-  // can refresh on demand, and re-derive isFull from fresh data.
-  const [slots, setSlots] = useState(state?.slots || null);
+  // On a browser refresh, router state is lost — fall back to sessionStorage
+  const session = loadFromSession();
+  const initEvent = state?.event  || session.event;
+  const initSlots = state?.slots  || session.slots;
+
+  const [event,      setEvent]      = useState(initEvent);
+  const [slots,      setSlots]      = useState(initSlots);
   const [refreshing, setRefreshing] = useState(false);
-  const event = state?.event;
+  const [loadError,  setLoadError]  = useState("");
 
-  // Guard: if someone lands here directly without state
-  if (!slots || !event) {
+  // If state was restored from sessionStorage, always re-fetch fresh data
+  // so a browser refresh reflects the latest backend state
+  useEffect(() => {
+    if (!initEvent) return;
+
+    // Always re-fetch on mount to ensure we have fresh data (handles browser refresh)
+    const fetchSlots = async () => {
+      setRefreshing(true);
+      try {
+        const { data } = await axios.get(`${API}/events/${initEvent.id}/slots`);
+        const fresh = data.slots || [];
+        setSlots(fresh);
+        saveToSession(initEvent, fresh);
+      } catch (err) {
+        console.error("Initial slots fetch error:", err);
+        // If we already have stale data from session, keep showing it
+        if (!initSlots) setLoadError("Failed to load slots. Please go back and try again.");
+      } finally {
+        setRefreshing(false);
+      }
+    };
+
+    fetchSlots();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Keep sessionStorage in sync whenever event changes
+  useEffect(() => {
+    if (event && slots) saveToSession(event, slots);
+  }, [event, slots]);
+
+  if (!event) {
     return (
       <>
         <Menu />
@@ -28,17 +80,34 @@ export default function Slots() {
     );
   }
 
+  if (loadError && !slots) {
+    return (
+      <>
+        <Menu />
+        <div style={styles.page}>
+          <div style={styles.errorBox}>{loadError}</div>
+        </div>
+      </>
+    );
+  }
+
   const handleRefresh = async () => {
     setRefreshing(true);
-    // Bust the events-page cache for this event's slots so it's also fresh there
-    memBust(`slots:${event.id}`);
-    const { data } = await supabase
-      .from("slots")
-      .select("id, name, date, time, capacity, booked_count, event_id")
-      .eq("event_id", event.id)
-      .order("date", { ascending: true });
-    if (data) setSlots(data.filter((s) => s.booked_count < s.capacity));
+    try {
+      // Fetch all slots — both released and unreleased are shown.
+      // is_released controls whether the book button is enabled.
+      const { data } = await axios.get(`${API}/events/${event.id}/slots`);
+      const fresh = data.slots || [];
+      setSlots(fresh);
+      saveToSession(event, fresh);
+    } catch (err) {
+      console.error("Refresh slots error:", err);
+    }
     setRefreshing(false);
+  };
+
+  const handleSelect = (slot) => {
+    navigate("/booking", { state: { slot, event } });
   };
 
   return (
@@ -46,65 +115,85 @@ export default function Slots() {
       <Menu />
       <Header />
       <div style={styles.page}>
-
         {/* ── Hero ── */}
         <div style={styles.hero}>
           <p style={styles.heroLabel}>Select a slot for</p>
           <h1 style={styles.heroTitle}>{event.name}</h1>
           <span style={{
             ...styles.priceBadge,
-            background: event.price > 0 ? "#FFE4D6" : "#E6FFF2",
-            color: event.price > 0 ? "#B94000" : "#1a7a45",
+            background: event.price > 0 ? "rgba(255,92,26,0.15)" : "rgba(22,163,74,0.15)",
+            color:      event.price > 0 ? "#FF5C1A" : "#16a34a",
+            border:     `1px solid ${event.price > 0 ? "rgba(255,92,26,0.3)" : "rgba(22,163,74,0.3)"}`,
           }}>
             {event.price > 0 ? `₹${event.price}` : "Free"}
           </span>
         </div>
 
-        {/* ── Slot count ── */}
-        <div style={styles.countRow}>
-          <span style={styles.countLabel}>
-            {slots.length} slot{slots.length !== 1 ? "s" : ""} available
+        {/* ── Controls ── */}
+        <div style={styles.controlRow}>
+          <span style={styles.slotCount}>
+            {slots.length} slot{slots.length !== 1 ? "s" : ""}
           </span>
           <button
             onClick={handleRefresh}
             disabled={refreshing}
-            style={styles.refreshBtn}
+            style={{ ...styles.refreshBtn, opacity: refreshing ? 0.6 : 1 }}
           >
-            {refreshing ? "Refreshing…" : "↻ Refresh"}
+            {refreshing ? "↻ Refreshing…" : "↻ Refresh"}
           </button>
         </div>
 
-        {/* ── Slots ── */}
+        {slots.length === 0 && (
+          <div style={styles.emptyBox}>
+            No slots available. Try refreshing.
+          </div>
+        )}
+
+        {/* ── Slot cards ── */}
         {slots.map((slot) => {
-          const spotsLeft = slot.capacity - slot.booked_count;
-          const isFull = spotsLeft <= 0;
+          const isReleased = slot.is_released === true;
+          const isFull     = (slot.booked_count ?? 0) >= slot.capacity;
+          const canBook    = isReleased && !isFull;
+          const spotsLeft  = slot.capacity - (slot.booked_count ?? 0);
 
           return (
             <div
               key={slot.id}
-              onClick={() => !isFull && navigate("/booking", { state: { slot, event } })}
+              onClick={() => canBook && handleSelect(slot)}
               style={{
-                ...styles.card,
-                opacity: isFull ? 0.5 : 1,
-                cursor: isFull ? "not-allowed" : "pointer",
+                ...styles.slotCard,
+                opacity: canBook ? 1 : 0.72,
+                cursor:  canBook ? "pointer" : "default",
               }}
             >
-              <div style={styles.cardLeft}>
+              <div style={styles.slotLeft}>
                 <h3 style={styles.slotName}>{slot.name}</h3>
-                <div style={styles.metaRow}>
-                  {slot.date && <span style={styles.meta}>📅 {slot.date}</span>}
-                  {slot.time && <span style={styles.meta}>🕐 {slot.time}</span>}
+                <div style={styles.slotMeta}>
+                  {slot.date && <span style={styles.metaChip}>📅 {slot.date}</span>}
+                  {slot.time && <span style={styles.metaChip}>🕐 {slot.time}</span>}
                 </div>
               </div>
-              <div style={styles.cardRight}>
-                <span style={{
-                  ...styles.spotsBadge,
-                  background: isFull ? "#f5f5f5" : spotsLeft <= 10 ? "#FFF3E0" : "#E6FFF2",
-                  color: isFull ? "#aaa" : spotsLeft <= 10 ? "#b45309" : "#1a7a45",
-                }}>
-                  {isFull ? "Full" : `${spotsLeft} left`}
-                </span>
-                {!isFull && <span style={styles.arrow}>→</span>}
+
+              <div style={styles.slotRight}>
+                {/* Availability / status badge */}
+                {!isReleased ? (
+                  <span style={styles.lockedBadge}>Passes not released yet</span>
+                ) : isFull ? (
+                  <span style={{ ...styles.availBadge, background: "#f5f5f5", color: "#aaa" }}>
+                    Full
+                  </span>
+                ) : (
+                  <span style={{
+                    ...styles.availBadge,
+                    background: spotsLeft <= 10 ? "#FFF3E0" : "#E6FFF2",
+                    color:      spotsLeft <= 10 ? "#b45309" : "#1a7a45",
+                  }}>
+                    {spotsLeft} left
+                  </span>
+                )}
+
+                {/* Arrow shown only when bookable */}
+                {canBook && <span style={styles.arrow}>→</span>}
               </div>
             </div>
           );
@@ -115,125 +204,23 @@ export default function Slots() {
 }
 
 const styles = {
-  page: {
-    padding: "20px",
-    maxWidth: "560px",
-    margin: "0 auto",
-    fontFamily: "'Segoe UI', system-ui, sans-serif",
-    color: "#1a1a1a",
-  },
-  hero: {
-    background: "#1A0A00",
-    color: "white",
-    padding: "22px 20px",
-    borderRadius: "12px",
-    marginBottom: "16px",
-    display: "flex",
-    flexDirection: "column",
-    gap: "6px",
-  },
-  heroLabel: {
-    color: "#aaa",
-    fontSize: "12px",
-    margin: 0,
-    textTransform: "uppercase",
-    letterSpacing: "0.06em",
-  },
-  heroTitle: {
-    color: "#FF5C1A",
-    fontSize: "24px",
-    fontWeight: 900,
-    margin: 0,
-    letterSpacing: "-0.02em",
-  },
-  priceBadge: {
-    alignSelf: "flex-start",
-    padding: "3px 10px",
-    borderRadius: "20px",
-    fontSize: "12px",
-    fontWeight: 700,
-  },
-  countRow: {
-    marginBottom: "12px",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "space-between",
-  },
-  countLabel: {
-    fontSize: "12px",
-    fontWeight: 600,
-    color: "#aaa",
-    background: "#f5f5f5",
-    padding: "3px 10px",
-    borderRadius: "20px",
-  },
-  card: {
-    background: "#fff",
-    border: "1px solid #eee",
-    borderRadius: "12px",
-    padding: "16px 18px",
-    marginBottom: "10px",
-    display: "flex",
-    justifyContent: "space-between",
-    alignItems: "center",
-    gap: "12px",
-    boxShadow: "0 1px 4px rgba(0,0,0,0.05)",
-    transition: "opacity 0.15s",
-  },
-  cardLeft: {
-    display: "flex",
-    flexDirection: "column",
-    gap: "6px",
-    flex: 1,
-  },
-  slotName: {
-    fontSize: "16px",
-    fontWeight: 700,
-    margin: 0,
-  },
-  metaRow: {
-    display: "flex",
-    gap: "12px",
-    flexWrap: "wrap",
-  },
-  meta: {
-    fontSize: "12px",
-    color: "#666",
-  },
-  cardRight: {
-    display: "flex",
-    flexDirection: "column",
-    alignItems: "flex-end",
-    gap: "6px",
-    flexShrink: 0,
-  },
-  spotsBadge: {
-    padding: "3px 10px",
-    borderRadius: "20px",
-    fontSize: "12px",
-    fontWeight: 700,
-  },
-  arrow: {
-    color: "#FF5C1A",
-    fontWeight: 700,
-    fontSize: "16px",
-  },
-  errorBox: {
-    background: "#fff0f0",
-    border: "1px solid #fdd",
-    color: "#d0312d",
-    fontSize: "13px",
-    padding: "12px",
-    borderRadius: "8px",
-  },
-  refreshBtn: {
-    background: "none",
-    border: "1px solid #ddd",
-    borderRadius: "20px",
-    padding: "3px 12px",
-    fontSize: "12px",
-    fontWeight: 600,
-    color: "#FF5C1A",
-    cursor: "pointer",
-  },
+  page:        { padding: "20px", maxWidth: "560px", margin: "0 auto", fontFamily: "'Segoe UI', system-ui, sans-serif", color: "#1a1a1a" },
+  hero:        { background: "#1A0A00", borderRadius: "14px", padding: "24px 20px", marginBottom: "16px" },
+  heroLabel:   { color: "rgba(255,255,255,0.4)", fontSize: "11px", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.1em", margin: "0 0 6px" },
+  heroTitle:   { color: "#FF5C1A", fontSize: "26px", fontWeight: 900, margin: "0 0 10px", letterSpacing: "-0.02em" },
+  priceBadge:  { display: "inline-block", padding: "3px 12px", borderRadius: "20px", fontSize: "13px", fontWeight: 700 },
+  controlRow:  { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "12px" },
+  slotCount:   { fontSize: "13px", color: "#aaa", fontWeight: 500 },
+  refreshBtn:  { background: "none", border: "1px solid #FF5C1A", color: "#FF5C1A", borderRadius: "8px", padding: "5px 12px", fontSize: "13px", fontWeight: 600, cursor: "pointer" },
+  slotCard:    { background: "#fff", border: "1px solid #eee", borderRadius: "12px", padding: "16px 18px", marginBottom: "10px", display: "flex", justifyContent: "space-between", alignItems: "center", gap: "12px", boxShadow: "0 1px 4px rgba(0,0,0,0.05)", transition: "opacity 0.15s" },
+  slotLeft:    { flex: 1, minWidth: 0 },
+  slotName:    { fontSize: "16px", fontWeight: 700, margin: "0 0 6px" },
+  slotMeta:    { display: "flex", gap: "8px", flexWrap: "wrap" },
+  metaChip:    { fontSize: "12px", color: "#666", background: "#f5f5f5", padding: "2px 8px", borderRadius: "6px" },
+  slotRight:   { display: "flex", flexDirection: "column", alignItems: "flex-end", gap: "6px", flexShrink: 0 },
+  availBadge:  { fontSize: "12px", fontWeight: 700, padding: "3px 10px", borderRadius: "20px" },
+  lockedBadge: { fontSize: "11px", fontWeight: 700, padding: "4px 10px", borderRadius: "20px", background: "#FFF3E0", color: "#b45309", border: "1px solid rgba(180,83,9,0.2)", whiteSpace: "nowrap" },
+  arrow:       { fontSize: "18px", color: "#FF5C1A" },
+  errorBox:    { background: "#fff0f0", border: "1px solid #fdd", color: "#d0312d", fontSize: "13px", padding: "10px 14px", borderRadius: "8px" },
+  emptyBox:    { background: "#fafafa", border: "2px dashed #eee", color: "#aaa", fontSize: "14px", padding: "24px", borderRadius: "12px", textAlign: "center" },
 };

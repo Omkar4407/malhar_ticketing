@@ -8,6 +8,8 @@ dotenv.config();
 import authRoutes from "./routes/auth.routes.js";
 import otpRoutes from "./routes/otp.routes.js";
 import bookingRoutes from "./routes/booking.routes.js";
+import scannerRoutes from "./routes/scanner.routes.js";
+import eventsRoutes  from "./routes/events.routes.js";
 
 const app = express();
 
@@ -36,5 +38,7 @@ app.use(express.json());
 app.use("/", authRoutes);
 app.use("/", otpRoutes);
 app.use("/", bookingRoutes);
+app.use("/", scannerRoutes);
+app.use("/", eventsRoutes);
 
 app.listen(5000, () => console.log("Server running on port 5000"));
