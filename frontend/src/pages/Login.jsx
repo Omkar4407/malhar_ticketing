@@ -15,6 +15,7 @@ export default function Login() {
   const [loading, setLoading] = useState(false);
   const [error, setError]   = useState("");
   const [resendCountdown, setResendCountdown] = useState(0);
+  const [devOtp, setDevOtp] = useState(null);
   const countdownRef = useRef(null);
   const navigate = useNavigate();
 
@@ -59,8 +60,9 @@ export default function Login() {
     }
     setLoading(true);
     try {
-      await axios.post(`${API}/send-otp`, { phone: cleanPhone });
+      const { data } = await axios.post(`${API}/send-otp`, { phone: cleanPhone });
       setPhone(cleanPhone);
+      setDevOtp(data.dev_otp || null);
       setStep(2);
       startResendCooldown();
     } catch (err) {
@@ -78,7 +80,8 @@ export default function Login() {
     setError("");
     setLoading(true);
     try {
-      await axios.post(`${API}/send-otp`, { phone });
+      const { data } = await axios.post(`${API}/send-otp`, { phone });
+      setDevOtp(data.dev_otp || null);
       startResendCooldown();
     } catch (err) {
       const msg = err.response?.data?.error;
@@ -173,6 +176,9 @@ export default function Login() {
           ) : (
             <>
               <label style={styles.label}>OTP sent to +91 {phone}</label>
+              {devOtp && (
+                <div style={styles.devOtpBox}>🛠 DEV MODE — OTP: <strong>{devOtp}</strong></div>
+              )}
               <input
                 type="tel"
                 inputMode="numeric"
@@ -325,5 +331,14 @@ const styles = {
     fontSize: "13px",
     padding: "8px 12px",
     borderRadius: "7px",
+  },
+  devOtpBox: {
+    background: "#fffbe6",
+    border: "1px solid #ffe58f",
+    color: "#7c5800",
+    fontSize: "14px",
+    padding: "8px 12px",
+    borderRadius: "7px",
+    textAlign: "center",
   },
 };

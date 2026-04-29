@@ -20,7 +20,8 @@ export async function sendOtp(req, res) {
     const otp = Math.floor(100000 + Math.random() * 900000);
     await storeOtp(phone, otp);
     await sendSmsOtp(phone, otp);
-    return res.json({ success: true });
+    const devPayload = process.env.DEV_MODE === "true" ? { dev_otp: otp } : {};
+    return res.json({ success: true, ...devPayload });
   } catch (err) {
     console.error("send-otp error:", err);
     return res.status(500).json({ error: "Failed to send OTP. Please try again." });
